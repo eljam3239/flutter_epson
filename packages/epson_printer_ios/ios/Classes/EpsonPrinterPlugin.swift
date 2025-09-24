@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import libepos2
+import libeposeasyselect
 
 public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     //idk here

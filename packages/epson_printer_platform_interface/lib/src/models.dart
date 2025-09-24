@@ -53,25 +53,41 @@ class EpsonPrinterStatus {
 class EpsonConnectionSettings {
   final EpsonPortType portType;
   final String identifier;
-  final int? timeout;
-  final EpsonPrinterSeries printerSeries;
-  final EpsonModelLang modelLang;
+  final int timeout;
+
+  // Note: printerSeries is not needed for connection, only for initialization
+  final EpsonPrinterSeries? printerSeries;
+  final EpsonModelLang? modelLang;
 
   const EpsonConnectionSettings({
     required this.portType,
     required this.identifier,
-    this.timeout,
-    required this.printerSeries,
+    this.timeout = 15000,
+    this.printerSeries,
     this.modelLang = EpsonModelLang.ank,
   });
+
+  /// Generates the target string for the Epson connect API
+  String get targetString {
+    final prefix = switch (portType) {
+      EpsonPortType.tcp => 'TCP',
+      EpsonPortType.bluetooth => 'BT',
+      EpsonPortType.usb => 'USB',
+      EpsonPortType.bluetoothLe => 'BLE',
+      EpsonPortType.all => 'TCP', // Default fallback
+    };
+    
+    return '$prefix:$identifier';
+  }
 
   Map<String, dynamic> toMap() {
     return {
       'portType': portType.index,
       'identifier': identifier,
       'timeout': timeout,
-      'printerSeries': printerSeries.index,
-      'modelLang': modelLang.index,
+      'targetString': targetString,
+      'printerSeries': printerSeries?.index,
+      'modelLang': modelLang?.index,
     };
   }
 
@@ -79,9 +95,13 @@ class EpsonConnectionSettings {
     return EpsonConnectionSettings(
       portType: EpsonPortType.values[map['portType'] ?? 0],
       identifier: map['identifier'] ?? '',
-      timeout: map['timeout'],
-      printerSeries: EpsonPrinterSeries.values[map['printerSeries'] ?? 0],
-      modelLang: EpsonModelLang.values[map['modelLang'] ?? 0],
+      timeout: map['timeout'] ?? 15000,
+      printerSeries: map['printerSeries'] != null 
+          ? EpsonPrinterSeries.values[map['printerSeries']] 
+          : null,
+      modelLang: map['modelLang'] != null 
+          ? EpsonModelLang.values[map['modelLang']] 
+          : null,
     );
   }
 }
