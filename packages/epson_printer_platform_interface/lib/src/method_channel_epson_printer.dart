@@ -7,7 +7,7 @@ import 'models.dart';
 class MethodChannelEpsonPrinter extends EpsonPrinterPlatform {
   /// The method channel used to interact with the native platform.
   @visibleForTesting
-  final methodChannel = const MethodChannel('star_printer');
+  final methodChannel = const MethodChannel('epson_printer');
 
   @override
   Future<List<String>> discoverPrinters() async {
