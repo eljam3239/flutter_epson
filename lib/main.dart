@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-
+import 'package:epson_printer/epson_printer.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'dart:io' show Platform;
 void main() {
   runApp(const MyApp());
 }
