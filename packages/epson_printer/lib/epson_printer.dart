@@ -1,5 +1,6 @@
 export 'package:epson_printer_platform_interface/epson_printer_platform_interface.dart'
-    show EpsonPrinterStatus, EpsonConnectionSettings, EpsonPortType, EpsonPrintJob;
+    show EpsonPrinterStatus, EpsonConnectionSettings, EpsonPortType, EpsonPrintJob, 
+         EpsonPrintCommand, EpsonCommandType;
 
 import 'package:epson_printer_platform_interface/epson_printer_platform_interface.dart';
 

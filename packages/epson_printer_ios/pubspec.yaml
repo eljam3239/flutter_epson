@@ -12,7 +12,7 @@ flutter:
     implements: epson_printer
     platforms:
       ios:
-        pluginClass: EpsonPrinterPlugin
+        pluginClass: EpsonPrinterIosPlugin
 
 dependencies:
   flutter:

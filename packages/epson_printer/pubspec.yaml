@@ -1,6 +1,7 @@
 name: epson_printer
 description: A Flutter plugin for Epson printers.
 version: 1.0.0
+publish_to: none
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -11,17 +12,17 @@ dependencies:
     sdk: flutter
   epson_printer_platform_interface:
     path: ../epson_printer_platform_interface
-  # epson_printer_ios:
-  #   path: ../epson_printer_ios
+  epson_printer_ios:
+    path: ../epson_printer_ios
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
-# flutter:
-#   plugin:
-#     platforms:
-#       ios:
-#         default_package: epson_printer_ios
-#       android:
-#         default_package: epson_printer_android
+flutter:
+  plugin:
+    platforms:
+      ios:
+        default_package: epson_printer_ios
+      # android:
+      #   default_package: epson_printer_android

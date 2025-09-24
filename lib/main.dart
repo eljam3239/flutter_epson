@@ -207,37 +207,36 @@ class _MyHomePageState extends State<MyHomePage> {
       
       final printerString = _selectedPrinter!; // Use selected printer instead of first
       
-      // Parse the printer string to determine interface type
-      EpsonPortType interfaceType;
-      String identifier;
-      
-      if (printerString.startsWith('TCP:')) {
-        interfaceType = EpsonPortType.tcp;
-        // Extract just the identifier part (MAC address or IP), ignore model info
-        final parts = printerString.substring(4).split(':');
-        identifier = parts[0]; // Take first part before any model info
-      } else if (printerString.startsWith('BT:')) {
-        interfaceType = EpsonPortType.bluetooth;
-        final parts = printerString.substring(3).split(':');
-        identifier = parts[0]; // Take first part before any model info
-      } else if (printerString.startsWith('BLE:')) {
-        interfaceType = EpsonPortType.bluetoothLe;
-        final parts = printerString.substring(4).split(':');
-        identifier = parts[0]; // Take first part before any model info
-      } else if (printerString.startsWith('USB:')) {
-        interfaceType = EpsonPortType.usb;
-        final parts = printerString.substring(4).split(':');
-        identifier = parts[0]; // Take first part before any model info
+      // Extract the target string from the discovery result
+      // Format is "target:deviceName", so we take everything before the last ':'
+      final lastColonIndex = printerString.lastIndexOf(':');
+      String target;
+      if (lastColonIndex != -1) {
+        target = printerString.substring(0, lastColonIndex);
       } else {
-        interfaceType = EpsonPortType.tcp;
-        identifier = printerString.split(':')[0]; // Take first part
+        target = printerString;
       }
       
-      print('DEBUG: Connecting to $interfaceType printer: $identifier (Selected: $printerString)');
+      // Parse the target to determine interface type
+      EpsonPortType interfaceType;
+      
+      if (target.startsWith('TCP:') || target.startsWith('TCPS:')) {
+        interfaceType = EpsonPortType.tcp;
+      } else if (target.startsWith('BT:')) {
+        interfaceType = EpsonPortType.bluetooth;
+      } else if (target.startsWith('BLE:')) {
+        interfaceType = EpsonPortType.bluetoothLe;
+      } else if (target.startsWith('USB:')) {
+        interfaceType = EpsonPortType.usb;
+      } else {
+        interfaceType = EpsonPortType.tcp;
+      }
+      
+      print('DEBUG: Connecting to $interfaceType printer with target: $target (Selected: $printerString)');
       
       final settings = EpsonConnectionSettings(
         portType: interfaceType,
-        identifier: identifier,
+        identifier: target, // Use the full target string
         timeout: 15000,
       );
       await EpsonPrinter.connect(settings);
@@ -258,66 +257,92 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-//   Future<void> _printReceipt() async {
-//     print('DEBUG: Print receipt button pressed');
+  Future<void> _printReceipt() async {
+    print('DEBUG: Print receipt button pressed');
     
-//     try {
-//       print('DEBUG: Creating print job...');
-//       final printJob = EpsonPrintJob(
-//         content: '''
-//            .--._.--.
-//           ( O     O )
-//           /   . .   \\
-//          .\`._______.\'.\`
-//         /(           )\\
-//       _/  \\  \\   /  /  \\_
-//    .~   \`  \\  \\ /  /  \'   ~.
-//   {    -.   \\  V  /   .-    }
-// _ _\`.    \\  |  |  |  /    .\'\_ _
-// >_       _} |  |  | {_       _<
-//  /. - ~ ,_-\'  .^.  \`-_, ~ - .\\
-//          \'-\'|/   \\|\`-\`
-
-// Hello Star Printer!
-// Counter: $_counter
-// Print Test
-
-// ''',
-//       );
+    if (!_isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please connect to a printer first')),
+      );
+      return;
+    }
+    
+    try {
+      print('DEBUG: Creating Epson print job...');
       
-//       print('DEBUG: Sending print job to printer...');
-//       await StarPrinter.printReceipt(printJob);
+      final printJob = EpsonPrintJob(
+        commands: [
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': 'EPSON PRINTER TEST\n'},
+          ),
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': '================\n'},
+          ),
+          EpsonPrintCommand(
+            type: EpsonCommandType.feed,
+            parameters: {'line': 1},
+          ),
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': 'Counter: $_counter\n'},
+          ),
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': 'Test Print Success!\n'},
+          ),
+          EpsonPrintCommand(
+            type: EpsonCommandType.feed,
+            parameters: {'line': 2},
+          ),
+          EpsonPrintCommand(
+            type: EpsonCommandType.text,
+            parameters: {'data': 'Thank you!\n'},
+          ),
+          EpsonPrintCommand(
+            type: EpsonCommandType.feed,
+            parameters: {'line': 1},
+          ),
+          EpsonPrintCommand(
+            type: EpsonCommandType.cut,
+            parameters: {},
+          ),
+        ],
+      );
       
-//       print('DEBUG: Print job completed successfully');
+      print('DEBUG: Sending print job to Epson printer...');
+      await EpsonPrinter.printReceipt(printJob);
       
-//       // Optionally open cash drawer after successful print
-//       if (_openDrawerAfterPrint && _isConnected) {
-//         try {
-//           print('DEBUG: Auto-opening cash drawer after print...');
-//           await StarPrinter.openCashDrawer();
-//           print('DEBUG: Auto cash drawer opened successfully');
-//         } catch (drawerError) {
-//           print('DEBUG: Auto cash drawer failed: $drawerError');
-//           // Don't fail the whole operation if drawer fails
-//         }
-//       }
+      print('DEBUG: Print job completed successfully');
       
-//       print('DEBUG: Print job completed successfully');
-//       ScaffoldMessenger.of(context).showSnackBar(
-//         SnackBar(content: Text(_openDrawerAfterPrint 
-//             ? 'Print job sent and drawer opened' 
-//             : 'Print job sent successfully')),
-//       );
-//     } catch (e) {
-//       print('DEBUG: Print failed with error: $e');
-//       print('DEBUG: Error type: ${e.runtimeType}');
-//       print('DEBUG: Error details: ${e.toString()}');
+      // Optionally open cash drawer after successful print
+      if (_openDrawerAfterPrint && _isConnected) {
+        try {
+          print('DEBUG: Auto-opening cash drawer after print...');
+          await EpsonPrinter.openCashDrawer();
+          print('DEBUG: Auto cash drawer opened successfully');
+        } catch (drawerError) {
+          print('DEBUG: Auto cash drawer failed: $drawerError');
+          // Don't fail the whole operation if drawer fails
+        }
+      }
       
-//       ScaffoldMessenger.of(context).showSnackBar(
-//         SnackBar(content: Text('Print failed: $e')),
-//       );
-//     }
-//   }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_openDrawerAfterPrint 
+            ? 'Print job sent and drawer opened' 
+            : 'Print job sent successfully')),
+      );
+    } catch (e) {
+      print('DEBUG: Print failed with error: $e');
+      print('DEBUG: Error type: ${e.runtimeType}');
+      print('DEBUG: Error details: ${e.toString()}');
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Print failed: $e')),
+      );
+    }
+  }
 
   Future<void> _disconnectFromPrinter() async {
     try {
@@ -349,28 +374,28 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  // Future<void> _openCashDrawer() async {
-  //   if (!_isConnected) {
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       const SnackBar(content: Text('Please connect to a printer first')),
-  //     );
-  //     return;
-  //   }
+  Future<void> _openCashDrawer() async {
+    if (!_isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please connect to a printer first')),
+      );
+      return;
+    }
 
-  //   try {
-  //     print('DEBUG: Opening cash drawer...');
-  //     await StarPrinter.openCashDrawer();
-  //     print('DEBUG: Cash drawer command sent successfully');
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       const SnackBar(content: Text('Cash drawer opened')),
-  //     );
-  //   } catch (e) {
-  //     print('DEBUG: Cash drawer error: $e');
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text('Cash drawer failed: $e')),
-  //     );
-  //   }
-  // }
+    try {
+      print('DEBUG: Opening cash drawer...');
+      await EpsonPrinter.openCashDrawer();
+      print('DEBUG: Cash drawer command sent successfully');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cash drawer opened')),
+      );
+    } catch (e) {
+      print('DEBUG: Cash drawer error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Cash drawer failed: $e')),
+      );
+    }
+  }
 
   // Future<void> _testDirectConnection() async {
   //   try {
@@ -492,9 +517,11 @@ class _MyHomePageState extends State<MyHomePage> {
                               final parts = printer.split(':');
                               final model = parts.length > 2 ? parts[2] : 'Unknown';
                               final mac = parts.length > 1 ? parts[1] : 'Unknown';
+                              // Safely truncate MAC address to avoid range errors
+                              final displayMac = mac.length > 8 ? '${mac.substring(0, 8)}...' : mac;
                               return DropdownMenuItem<String>(
                                 value: printer,
-                                child: Text('$model (${mac.substring(0, 8)}...)'),
+                                child: Text('$model ($displayMac)'),
                               );
                             }).toList(),
                             onChanged: (String? newValue) {
@@ -558,18 +585,18 @@ class _MyHomePageState extends State<MyHomePage> {
                           onPressed: _isConnected ? _disconnectFromPrinter : null,
                           child: const Text('Disconnect'),
                         ),
-                        // ElevatedButton(
-                        //   onPressed: _printReceipt,
-                        //   child: const Text('Print Receipt'),
-                        // ),
+                        ElevatedButton(
+                          onPressed: _isConnected ? _printReceipt : null,
+                          child: const Text('Print Test Receipt'),
+                        ),
                         ElevatedButton(
                           onPressed: _getStatus,
                           child: const Text('Get Status'),
                         ),
-                        // ElevatedButton(
-                        //   onPressed: _isConnected ? _openCashDrawer : null,
-                        //   child: const Text('Open Cash Drawer'),
-                        // ),
+                        ElevatedButton(
+                          onPressed: _isConnected ? _openCashDrawer : null,
+                          child: const Text('Open Cash Drawer'),
+                        ),
                       ],
                     ),
                   ],
