@@ -14,6 +14,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *discoveredPrinters;
 
 - (void)startDiscoveryWithFilter:(int32_t)filter completion:(void (^)(NSArray<NSDictionary *> *printers))completion;
+- (void)startBluetoothDiscoveryWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion;
+- (void)findPairedBluetoothPrintersWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion;
 - (void)stopDiscovery;
 - (BOOL)connectToPrinter:(NSString *)target withSeries:(int32_t)series language:(int32_t)language timeout:(int32_t)timeout;
 - (void)disconnect;
@@ -21,6 +23,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)printWithCommands:(NSArray<NSDictionary *> *)commands;
 - (void)clearCommandBuffer;
 - (BOOL)openCashDrawer;
+- (void)pairBluetoothDeviceWithCompletion:(void (^)(NSString * _Nullable target, int result))completion;
 
 @end
 

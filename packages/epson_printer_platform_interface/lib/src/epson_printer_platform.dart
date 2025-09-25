@@ -31,6 +31,14 @@ abstract class EpsonPrinterPlatform extends PlatformInterface {
     throw UnimplementedError('discoverBluetoothPrinters() has not been implemented.');
   }
 
+  Future<List<String>> findPairedBluetoothPrinters() {
+    throw UnimplementedError('findPairedBluetoothPrinters() has not been implemented.');
+  }
+
+  Future<Map<String, dynamic>> pairBluetoothDevice() {
+    throw UnimplementedError('pairBluetoothDevice() has not been implemented.');
+  }
+
   /// Runs USB system diagnostics
   Future<Map<String, dynamic>> usbDiagnostics() {
     throw UnimplementedError('usbDiagnostics() has not been implemented.');

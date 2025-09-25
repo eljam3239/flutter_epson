@@ -1,4 +1,6 @@
+import Foundation
 import Flutter
+import ExternalAccessory
 import UIKit
 
 public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
@@ -26,7 +28,20 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
         case "discoverPrinters":
             discoverPrinters(call: call, result: result)
         case "discoverBluetoothPrinters":
+            // Debug: list currently connected ExternalAccessory devices and protocol strings
+            let accessories = EAAccessoryManager.shared().connectedAccessories
+            if accessories.isEmpty {
+                print("EAAccessory: No connected accessories found.")
+            } else {
+                for acc in accessories {
+                    print("EAAccessory connected: name=\(acc.name), manufacturer=\(acc.manufacturer), model=\(acc.modelNumber), serial=\(acc.serialNumber), protocols=\(acc.protocolStrings)")
+                }
+            }
             discoverBluetoothPrinters(call: call, result: result)
+        case "findPairedBluetoothPrinters":
+            findPairedBluetoothPrinters(call: call, result: result)
+        case "pairBluetoothDevice":
+            pairBluetoothDevice(result: result)
         case "usbDiagnostics":
             usbDiagnostics(result: result)
         case "connect":
@@ -87,27 +102,93 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private func discoverBluetoothPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
         print("DEBUG: Starting Bluetooth printer discovery...")
         
-        epsonWrapper.startDiscovery(withFilter: 2) { [weak self] printers in // EPOS2_PORTTYPE_BLUETOOTH = 2
-            // Convert to legacy string format for backwards compatibility
-            let printerStrings = printers.compactMap { printer -> String? in
-                guard let target = printer["target"] as? String,
-                      let deviceName = printer["deviceName"] as? String else {
-                    return nil
+        // Add error handling wrapper
+        do {
+            epsonWrapper.startBluetoothDiscovery { [weak self] printers in
+                print("DEBUG: Bluetooth discovery callback received with \(printers.count) printers")
+                
+                // Convert to legacy string format for backwards compatibility
+                let printerStrings = printers.compactMap { printer -> String? in
+                    guard let target = printer["target"] as? String,
+                          let deviceName = printer["deviceName"] as? String else {
+                        print("DEBUG: Skipping printer with missing target or deviceName")
+                        return nil
+                    }
+                    
+                    print("DEBUG: Found Bluetooth printer - Target: \(target), Name: \(deviceName)")
+                    return "\(target):\(deviceName)"
                 }
-                return "\(target):\(deviceName)"
+                
+                print("DEBUG: Bluetooth discovery completed. Found \(printerStrings.count) printers: \(printerStrings)")
+                
+                DispatchQueue.main.async {
+                    result(printerStrings)
+                }
             }
-            
+        } catch {
+            print("DEBUG: Bluetooth discovery threw error: \(error)")
             DispatchQueue.main.async {
-                result(printerStrings)
+                result([])
             }
         }
     }
     
+    private func findPairedBluetoothPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        print("DEBUG: Starting paired Bluetooth printer discovery...")
+        
+        do {
+            epsonWrapper.findPairedBluetoothPrinters { [weak self] printers in
+                print("DEBUG: Paired Bluetooth discovery callback received with \(printers.count) printers")
+                
+                // Convert to legacy string format for backwards compatibility
+                let printerStrings = printers.compactMap { printer -> String? in
+                    guard let target = printer["target"] as? String,
+                          let deviceName = printer["deviceName"] as? String else {
+                        print("DEBUG: Skipping paired printer with missing target or deviceName")
+                        return nil
+                    }
+                    
+                    // Log the MAC address if available
+                    if let macAddress = printer["macAddress"] as? String, !macAddress.isEmpty {
+                        print("DEBUG: Found paired Bluetooth printer - Target: \(target), Name: \(deviceName), MAC: \(macAddress)")
+                    } else {
+                        print("DEBUG: Found paired Bluetooth printer - Target: \(target), Name: \(deviceName)")
+                    }
+                    
+                    return "\(target):\(deviceName)"
+                }
+                
+                print("DEBUG: Paired Bluetooth discovery completed. Found \(printerStrings.count) printers: \(printerStrings)")
+                
+                DispatchQueue.main.async {
+                    result(printerStrings)
+                }
+            }
+        } catch {
+            print("DEBUG: Paired Bluetooth discovery threw error: \(error)")
+            DispatchQueue.main.async {
+                result([])
+            }
+        }
+    }
+
     private func usbDiagnostics(result: @escaping FlutterResult) {
         print("DEBUG: usbDiagnostics called")
         result(["status": "not_implemented", "message": "USB diagnostics not yet implemented"])
     }
     
+    private func pairBluetoothDevice(result: @escaping FlutterResult) {
+        print("DEBUG: pairBluetoothDevice called")
+        epsonWrapper.pairBluetoothDevice { target, ret in
+            print("DEBUG: pairBluetoothDevice completed with ret=\(ret), target=\(String(describing: target))")
+            if let target = target {
+                result(["target": target, "resultCode": ret])
+            } else {
+                result(["target": NSNull(), "resultCode": ret])
+            }
+        }
+    }
+
     private func connect(call: FlutterMethodCall, result: @escaping FlutterResult) {
         print("DEBUG: connect called with arguments: \(String(describing: call.arguments))")
         
@@ -133,7 +214,8 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
         
         let timeout = args["timeout"] as? Int ?? 15000
         
-        DispatchQueue.global(qos: .userInitiated).async {
+        // Use background QoS to avoid QoS inversion with Epson internals
+        DispatchQueue.global(qos: .background).async {
           let success = self.epsonWrapper.connect(toPrinter: targetString, 
                                                           withSeries: self.printerSeries, 
                                                           language: self.printerLang, 

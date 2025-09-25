@@ -18,6 +18,14 @@ class EpsonPrinter {
     return _platform.discoverBluetoothPrinters();
   }
 
+  static Future<List<String>> findPairedBluetoothPrinters() {
+    return _platform.findPairedBluetoothPrinters();
+  }
+
+  static Future<Map<String, dynamic>> pairBluetoothDevice() {
+    return _platform.pairBluetoothDevice();
+  }
+
   /// Runs USB system diagnostics for troubleshooting
   static Future<Map<String, dynamic>> usbDiagnostics() {
     return _platform.usbDiagnostics();

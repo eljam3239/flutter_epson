@@ -17,8 +17,20 @@ class MethodChannelEpsonPrinter extends EpsonPrinterPlatform {
 
   @override
   Future<List<String>> discoverBluetoothPrinters() async {
-    final result = await methodChannel.invokeMethod<List<dynamic>>('discoverBluetoothPrinters');
-    return result?.cast<String>() ?? [];
+    final List<dynamic> result = await methodChannel.invokeMethod('discoverBluetoothPrinters');
+    return result.cast<String>();
+  }
+
+  @override
+  Future<List<String>> findPairedBluetoothPrinters() async {
+    final List<dynamic> result = await methodChannel.invokeMethod('findPairedBluetoothPrinters');
+    return result.cast<String>();
+  }
+
+  @override
+  Future<Map<String, dynamic>> pairBluetoothDevice() async {
+    final Map<dynamic, dynamic> result = await methodChannel.invokeMethod('pairBluetoothDevice');
+    return Map<String, dynamic>.from(result);
   }
 
   @override

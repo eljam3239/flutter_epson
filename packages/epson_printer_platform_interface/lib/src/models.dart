@@ -69,14 +69,24 @@ class EpsonConnectionSettings {
 
   /// Generates the target string for the Epson connect API
   String get targetString {
+    // If identifier already includes a known prefix, use it as-is to avoid double-prefixing
+    final upper = identifier.toUpperCase();
+    final hasScheme = upper.startsWith('TCP:') ||
+        upper.startsWith('TCPS:') ||
+        upper.startsWith('BT:') ||
+        upper.startsWith('BLE:') ||
+        upper.startsWith('USB:');
+    if (hasScheme) {
+      return identifier;
+    }
+
     final prefix = switch (portType) {
       EpsonPortType.tcp => 'TCP',
       EpsonPortType.bluetooth => 'BT',
       EpsonPortType.usb => 'USB',
       EpsonPortType.bluetoothLe => 'BLE',
-      EpsonPortType.all => 'TCP', // Default fallback
+      EpsonPortType.all => 'TCP',
     };
-    
     return '$prefix:$identifier';
   }
 

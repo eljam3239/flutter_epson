@@ -4,6 +4,11 @@
 
 #import "EpsonSDKWrapper.h"
 
+// Private interface
+@interface EpsonSDKWrapper ()
+- (void)tryBluetoothDiscovery:(int)portType withFallback:(BOOL)useFallback;
+@end
+
 @implementation EpsonSDKWrapper
 
 - (instancetype)init {
@@ -16,64 +21,54 @@
 
 - (void)startDiscoveryWithFilter:(int32_t)filter completion:(void (^)(NSArray<NSDictionary *> *))completion {
     NSLog(@"Starting discovery with filter: %d", filter);
+    if (!completion) { NSLog(@"ERROR: No completion handler provided for discovery"); return; }
     
-    // Ensure we have a valid completion handler
-    if (!completion) {
-        NSLog(@"ERROR: No completion handler provided for discovery");
-        return;
-    }
-    
-    @try {
-        // Stop any existing discovery first
-        [Epos2Discovery stop];
-        
-        [self.discoveredPrinters removeAllObjects];
-        self.discoveryCompletionHandler = completion;
-        
-        // Create filter option object
-        Epos2FilterOption *filterOption = [[Epos2FilterOption alloc] init];
-        if (!filterOption) {
-            NSLog(@"ERROR: Failed to create filter option");
-            completion(@[]);
-            return;
-        }
-        
-        // Use the filter value directly as the port type
-        [filterOption setPortType:filter];
-        NSLog(@"Set filter to port type: %d", filter);
-        
-        NSLog(@"Created filter option, starting discovery...");
-        
-        int32_t result = [Epos2Discovery start:filterOption delegate:self];
-        NSLog(@"Discovery start result: %d (EPOS2_SUCCESS=0)", result);
-        
-        if (result != EPOS2_SUCCESS) {
-            NSLog(@"Discovery start failed with result: %d", result);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            // Stop any existing discovery first (loop until not processing)
+            int stopRet = EPOS2_SUCCESS;
+            do { stopRet = [Epos2Discovery stop]; } while (stopRet == EPOS2_ERR_PROCESSING);
+            
+            [self.discoveredPrinters removeAllObjects];
+            self.discoveryCompletionHandler = completion;
+            
+            Epos2FilterOption *filterOption = [[Epos2FilterOption alloc] init];
+            if (!filterOption) { NSLog(@"ERROR: Failed to create filter option"); completion(@[]); self.discoveryCompletionHandler = nil; return; }
+            
+            // Match sample: restrict to printers and set port type if provided
+            [filterOption setDeviceType:EPOS2_TYPE_PRINTER];
+            if (filter != EPOS2_PARAM_UNSPECIFIED) {
+                [filterOption setPortType:filter];
+            }
+            
+            NSLog(@"Created filter option (deviceType=PRINTER, portType=%d), starting discovery...", filter);
+            int32_t result = [Epos2Discovery start:filterOption delegate:self];
+            NSLog(@"Discovery start result: %d (EPOS2_SUCCESS=0)", result);
+            if (result != EPOS2_SUCCESS) { completion(@[]); self.discoveryCompletionHandler = nil; return; }
+            
+            // Timeout: 10s then stop (on main) and complete
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                NSLog(@"Discovery timeout reached, stopping discovery...");
+                int sret = EPOS2_SUCCESS;
+                do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
+                if (self.discoveryCompletionHandler) {
+                    self.discoveryCompletionHandler([self.discoveredPrinters copy]);
+                    self.discoveryCompletionHandler = nil;
+                }
+            });
+        } @catch (NSException *exception) {
+            NSLog(@"Exception in startDiscovery: %@", exception);
             completion(@[]);
             self.discoveryCompletionHandler = nil;
-            return;
         }
-        
-        // Set up a timer to stop discovery after 10 seconds
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            NSLog(@"Discovery timeout reached, stopping discovery...");
-            [self stopDiscovery];
-            if (self.discoveryCompletionHandler) {
-                NSLog(@"Completing discovery with %lu printers found", (unsigned long)self.discoveredPrinters.count);
-                self.discoveryCompletionHandler([self.discoveredPrinters copy]);
-                self.discoveryCompletionHandler = nil;
-            }
-        });
-        
-    } @catch (NSException *exception) {
-        NSLog(@"Exception in startDiscovery: %@", exception);
-        completion(@[]);
-        self.discoveryCompletionHandler = nil;
-    }
+    });
 }
 
 - (void)stopDiscovery {
-    [Epos2Discovery stop];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        int result = EPOS2_SUCCESS;
+        do { result = [Epos2Discovery stop]; } while (result == EPOS2_ERR_PROCESSING);
+    });
 }
 
 - (BOOL)connectToPrinter:(NSString *)target withSeries:(int32_t)series language:(int32_t)language timeout:(int32_t)timeout {
@@ -256,6 +251,175 @@
     NSLog(@"DEBUG: Cash drawer result: %d (EPOS2_SUCCESS=0)", result);
     
     return result == EPOS2_SUCCESS;
+}
+
+- (void)startBluetoothDiscoveryWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion {
+    NSLog(@"startBluetoothDiscoveryWithCompletion called");
+    if (!completion) { NSLog(@"ERROR: No completion handler provided for Bluetooth discovery"); return; }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            int stopRet = EPOS2_SUCCESS;
+            do { stopRet = [Epos2Discovery stop]; } while (stopRet == EPOS2_ERR_PROCESSING);
+            [self.discoveredPrinters removeAllObjects];
+            self.discoveryCompletionHandler = completion;
+            
+            // Try BLE first, then fallback to Classic BT
+            [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH_LE withFallback:YES];
+        } @catch (NSException *exception) {
+            NSLog(@"Exception in startBluetoothDiscovery: %@", exception);
+            completion(@[]);
+            self.discoveryCompletionHandler = nil;
+        }
+    });
+}
+
+- (void)tryBluetoothDiscovery:(int)portType withFallback:(BOOL)useFallback {
+    NSString *portTypeName = (portType == EPOS2_PORTTYPE_BLUETOOTH_LE) ? @"Bluetooth LE" : @"Classic Bluetooth";
+    NSLog(@"Trying %@ discovery...", portTypeName);
+    
+    // Create filter option for the specified Bluetooth type
+    Epos2FilterOption *bluetoothFilter = [[Epos2FilterOption alloc] init];
+    if (!bluetoothFilter) {
+        NSLog(@"ERROR: Failed to create Bluetooth filter option");
+        if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler(@[]); self.discoveryCompletionHandler = nil; }
+        return;
+    }
+    [bluetoothFilter setDeviceType:EPOS2_TYPE_PRINTER];
+    [bluetoothFilter setPortType:portType];
+    
+    int32_t result = [Epos2Discovery start:bluetoothFilter delegate:self];
+    NSLog(@"%@ discovery start result: %d (EPOS2_SUCCESS=0)", portTypeName, result);
+    
+    if (result != EPOS2_SUCCESS) {
+        if (useFallback && portType == EPOS2_PORTTYPE_BLUETOOTH_LE) {
+            NSLog(@"Bluetooth LE failed, trying Classic Bluetooth...");
+            [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
+            return;
+        }
+        if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler(@[]); self.discoveryCompletionHandler = nil; }
+        return;
+    }
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSLog(@"%@ discovery timeout reached, stopping discovery...", portTypeName);
+        int sret = EPOS2_SUCCESS;
+        do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
+        NSUInteger count = self.discoveredPrinters.count;
+        if (count > 0 || !useFallback || portType == EPOS2_PORTTYPE_BLUETOOTH) {
+            if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler([self.discoveredPrinters copy]); self.discoveryCompletionHandler = nil; }
+        } else {
+            NSLog(@"No printers found with Bluetooth LE, trying Classic Bluetooth...");
+            [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
+        }
+    });
+}
+
+- (void)findPairedBluetoothPrintersWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion {
+    NSLog(@"findPairedBluetoothPrintersWithCompletion called - looking for already paired devices");
+    
+    if (!completion) {
+        NSLog(@"ERROR: No completion handler provided for paired Bluetooth discovery");
+        return;
+    }
+    
+    // Ensure Epson discovery start/stop runs on the main thread (Epson SDK expects main thread)
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            // Stop any existing discovery first
+            [Epos2Discovery stop];
+            
+            [self.discoveredPrinters removeAllObjects];
+            __block BOOL discoveryCompleted = NO;
+            
+            // Store completion handler
+            void (^savedCompletion)(NSArray<NSDictionary *> *) = [completion copy];
+            
+            // Set up discovery completion
+            self.discoveryCompletionHandler = ^(NSArray<NSDictionary *> *printers) {
+                if (!discoveryCompleted) {
+                    discoveryCompleted = YES;
+                    NSLog(@"Paired Bluetooth discovery completed with %lu devices", (unsigned long)printers.count);
+                    savedCompletion(printers);
+                }
+            };
+            
+            // Try BLE discovery first (for paired devices, this should find BD addresses)
+            NSLog(@"Starting paired device discovery with BLE (main thread)...");
+            
+            Epos2FilterOption *bleFilter = [[Epos2FilterOption alloc] init];
+            [bleFilter setPortType:EPOS2_PORTTYPE_BLUETOOTH_LE];
+            
+            int32_t result = [Epos2Discovery start:bleFilter delegate:self];
+            NSLog(@"Paired BLE discovery result: %d", result);
+            
+            if (result != EPOS2_SUCCESS) {
+                // Try classic Bluetooth if BLE fails
+                NSLog(@"BLE discovery failed, trying classic Bluetooth for paired devices (main thread)...");
+                
+                Epos2FilterOption *btFilter = [[Epos2FilterOption alloc] init];
+                [btFilter setPortType:EPOS2_PORTTYPE_BLUETOOTH];
+                
+                result = [Epos2Discovery start:btFilter delegate:self];
+                NSLog(@"Paired BT discovery result: %d", result);
+            }
+            
+            if (result != EPOS2_SUCCESS) {
+                NSLog(@"Both BLE and BT discovery failed for paired devices");
+                if (!discoveryCompleted) {
+                    discoveryCompleted = YES;
+                    savedCompletion(@[]);
+                }
+                return;
+            }
+            
+            // Set timeout for paired device discovery
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                NSLog(@"Paired device discovery timeout reached");
+                [Epos2Discovery stop];
+                
+                if (!discoveryCompleted) {
+                    discoveryCompleted = YES;
+                    NSLog(@"Found %lu paired devices", (unsigned long)self.discoveredPrinters.count);
+                    savedCompletion([self.discoveredPrinters copy]);
+                }
+            });
+            
+        } @catch (NSException *exception) {
+            NSLog(@"Exception in findPairedBluetoothPrinters: %@", exception);
+            completion(@[]);
+        }
+    });
+}
+
+- (void)pairBluetoothDeviceWithCompletion:(void (^)(NSString * _Nullable target, int result))completion {
+    NSLog(@"pairBluetoothDeviceWithCompletion called");
+    if (!completion) { return; }
+    
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @try {
+            Epos2BluetoothConnection *bt = [[Epos2BluetoothConnection alloc] init];
+            if (!bt) {
+                dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, EPOS2_BT_ERR_FAILURE); });
+                return;
+            }
+            NSMutableString *mac = [NSMutableString string];
+            int ret = [bt connectDevice:mac];
+            NSLog(@"connectDevice returned: %d, mac: %@", ret, mac);
+            if (ret == EPOS2_BT_SUCCESS || ret == EPOS2_BT_ERR_ALREADY_CONNECT) {
+                NSString *macStr = [mac copy];
+                // If SDK already returns a scheme (BT:/BLE:), use it as-is. Otherwise, prefix with BT:
+                NSString *upper = [macStr uppercaseString];
+                BOOL hasScheme = [upper hasPrefix:@"BT:"] || [upper hasPrefix:@"BLE:"] || [upper hasPrefix:@"TCP:"] || [upper hasPrefix:@"TCPS:"] || [upper hasPrefix:@"USB:"];
+                NSString *target = hasScheme ? macStr : [NSString stringWithFormat:@"BT:%@", macStr];
+                dispatch_async(dispatch_get_main_queue(), ^{ completion(target, ret); });
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, ret); });
+            }
+        } @catch (NSException *ex) {
+            NSLog(@"Exception in pairBluetoothDeviceWithCompletion: %@", ex);
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(nil, EPOS2_BT_ERR_FAILURE); });
+        }
+    });
 }
 
 #pragma mark - Epos2DiscoveryDelegate

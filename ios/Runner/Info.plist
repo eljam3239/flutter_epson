@@ -47,6 +47,10 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app uses local network access to discover and communicate with Epson printers on your network.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>This app uses Bluetooth to discover and communicate with Epson printers via Bluetooth connection.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>This app uses Bluetooth to discover and communicate with Epson printers via Bluetooth connection.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_http._tcp</string>
@@ -54,6 +58,12 @@
 		<string>_printer._tcp</string>
 		<string>_ipp._tcp</string>
 		<string>_pdl-datastream._tcp</string>
+	</array>
+	<!-- ExternalAccessory protocol(s) required for classic Bluetooth printing with Epson ePOS SDK -->
+	<key>UISupportedExternalAccessoryProtocols</key>
+	<array>
+		<string>com.epson.posprinter</string>
+		<string>com.epson.escpos</string>
 	</array>
 </dict>
 </plist>
