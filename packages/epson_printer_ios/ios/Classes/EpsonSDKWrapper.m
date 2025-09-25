@@ -244,8 +244,17 @@
         return NO;
     }
     
+    NSLog(@"DEBUG: openCashDrawer called");
+    // Clear any existing commands in the buffer first
+    [self.printer clearCommandBuffer];
+    
+    NSLog(@"DEBUG: Adding pulse command for cash drawer");
     [self.printer addPulse:EPOS2_DRAWER_2PIN time:EPOS2_PULSE_100];
+    
+    NSLog(@"DEBUG: Sending cash drawer pulse...");
     int32_t result = [self.printer sendData:EPOS2_PARAM_DEFAULT];
+    NSLog(@"DEBUG: Cash drawer result: %d (EPOS2_SUCCESS=0)", result);
+    
     return result == EPOS2_SUCCESS;
 }
 
