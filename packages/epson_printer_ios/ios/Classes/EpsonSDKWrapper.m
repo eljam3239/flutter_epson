@@ -432,7 +432,7 @@
         @"deviceName": deviceInfo.deviceName ?: @"",
         @"deviceType": @(deviceInfo.deviceType),
         @"ipAddress": deviceInfo.ipAddress ?: @"",
-        @"macAddress": deviceInfo.macAddress ?: @""
+        @"macAddress": deviceInfo.macAddress ?: @"",
     };
     
     [self.discoveredPrinters addObject:printerInfo];

@@ -18,6 +18,11 @@ class EpsonPrinter {
     return _platform.discoverBluetoothPrinters();
   }
 
+  /// Discovers available USB Epson printers specifically
+  static Future<List<String>> discoverUsbPrinters() {
+    return _platform.discoverUsbPrinters();
+  }
+
   static Future<List<String>> findPairedBluetoothPrinters() {
     return _platform.findPairedBluetoothPrinters();
   }

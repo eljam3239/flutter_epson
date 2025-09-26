@@ -665,6 +665,30 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Future<void> _discoverUsbPrinters() async {
+    try {
+      final printers = await EpsonPrinter.discoverUsbPrinters();
+      print('DEBUG: USB discovery result: $printers');
+      setState(() {
+        // Remove existing USB entries then add new ones
+        final updated = List<String>.from(_discoveredPrinters);
+        updated.removeWhere((p) => p.startsWith('USB:'));
+        updated.addAll(printers.where((p) => p.startsWith('USB:')));
+        _discoveredPrinters = updated;
+        if (_selectedPrinter == null && _discoveredPrinters.isNotEmpty) {
+          _selectedPrinter = _discoveredPrinters.first;
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Found ${printers.length} USB printers')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('USB discovery failed: $e')),
+      );
+    }
+  }
+
   // Future<void> _testDirectConnection() async {
   //   try {
   //     print('DEBUG: Testing direct connection to TSP100 at 10.20.30.125...');
@@ -842,6 +866,10 @@ class _MyHomePageState extends State<MyHomePage> {
                         ElevatedButton(
                           onPressed: _discoverBluetoothPrinters,
                           child: const Text('Discover Bluetooth'),
+                        ),
+                        ElevatedButton(
+                          onPressed: _discoverUsbPrinters,
+                          child: const Text('Discover USB'),
                         ),
                         ElevatedButton(
                           onPressed: _pairBluetooth,
