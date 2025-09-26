@@ -47,3 +47,4 @@ app.*.map.json
 # ios frameworks
 /packages/epson_printer_ios/ios/Frameworks/*
 /example_epos
+/example_epos_android

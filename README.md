@@ -12,7 +12,7 @@ Tested:
 | Device      | TM-m30III |
 |-------------|--------|
 | iOS         |   LAN, Bluetooth, usb     | 
-| Android     |  LAN      |
+| Android     |       |
 
 
 ## TODO
