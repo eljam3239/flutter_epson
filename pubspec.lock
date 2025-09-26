@@ -56,6 +56,13 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  epson_printer_android:
+    dependency: transitive
+    description:
+      path: "packages/epson_printer_android"
+      relative: true
+    source: path
+    version: "0.0.1"
   epson_printer_ios:
     dependency: transitive
     description:
