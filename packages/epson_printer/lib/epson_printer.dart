@@ -13,7 +13,7 @@ class EpsonPrinter {
     return _platform.discoverPrinters();
   }
 
-  /// Discovers available Bluetooth Epson printers specifically
+  /// Discovers available Bluetooth Epson printers. On iOS this returns both live and already paired devices.
   static Future<List<String>> discoverBluetoothPrinters() {
     return _platform.discoverBluetoothPrinters();
   }
@@ -23,8 +23,10 @@ class EpsonPrinter {
     return _platform.discoverUsbPrinters();
   }
 
+  @Deprecated('Use discoverBluetoothPrinters() instead; it returns paired and live Bluetooth printers.')
   static Future<List<String>> findPairedBluetoothPrinters() {
-    return _platform.findPairedBluetoothPrinters();
+    // Alias to keep API simple and consistent
+    return _platform.discoverBluetoothPrinters();
   }
 
   static Future<Map<String, dynamic>> pairBluetoothDevice() {

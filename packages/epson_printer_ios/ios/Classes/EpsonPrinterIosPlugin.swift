@@ -104,34 +104,42 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private func discoverBluetoothPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
         print("DEBUG: Starting Bluetooth printer discovery...")
         
-        // Add error handling wrapper
+        // First: active discovery (BLE with fallback to Classic BT)
         do {
-            epsonWrapper.startBluetoothDiscovery { [weak self] printers in
-                print("DEBUG: Bluetooth discovery callback received with \(printers.count) printers")
+            epsonWrapper.startBluetoothDiscovery { [weak self] livePrinters in
+                print("DEBUG: Bluetooth discovery callback received with \(livePrinters.count) printers")
                 
-                // Convert to legacy string format for backwards compatibility
-                let printerStrings = printers.compactMap { printer -> String? in
+                let liveStrings = livePrinters.compactMap { printer -> String? in
                     guard let target = printer["target"] as? String,
                           let deviceName = printer["deviceName"] as? String else {
                         print("DEBUG: Skipping printer with missing target or deviceName")
                         return nil
                     }
-                    
                     print("DEBUG: Found Bluetooth printer - Target: \(target), Name: \(deviceName)")
                     return "\(target):\(deviceName)"
                 }
                 
-                print("DEBUG: Bluetooth discovery completed. Found \(printerStrings.count) printers: \(printerStrings)")
-                
-                DispatchQueue.main.async {
-                    result(printerStrings)
+                // Second: paired discovery to include already paired devices
+                self?.epsonWrapper.findPairedBluetoothPrinters { pairedPrinters in
+                    print("DEBUG: Paired Bluetooth discovery callback received with \(pairedPrinters.count) printers")
+                    let pairedStrings = pairedPrinters.compactMap { printer -> String? in
+                        guard let target = printer["target"] as? String,
+                              let deviceName = printer["deviceName"] as? String else { return nil }
+                        return "\(target):\(deviceName)"
+                    }
+                    
+                    // Merge and de-dupe
+                    var set = Set<String>()
+                    liveStrings.forEach { set.insert($0) }
+                    pairedStrings.forEach { set.insert($0) }
+                    let all = Array(set)
+                    print("DEBUG: Bluetooth combined discovery found \(all.count) printers: \(all)")
+                    DispatchQueue.main.async { result(all) }
                 }
             }
         } catch {
             print("DEBUG: Bluetooth discovery threw error: \(error)")
-            DispatchQueue.main.async {
-                result([])
-            }
+            DispatchQueue.main.async { result([]) }
         }
     }
     

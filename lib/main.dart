@@ -322,8 +322,8 @@ class _MyHomePageState extends State<MyHomePage> {
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⡴⠊⠉⠉⠉⠉⠉⣩⡷⠋⠉⠹⡛⢽⠢⣀⣀⡀⠀
 ⢀⣀⣤⣴⠶⣾⣿⡿⠯⠯⣍⣙⣒⣲⠶⠶⠶⡿⢴⠧⠷⠒⣿⣏⠡⡤⠤⠯⡆
 ⣿⣶⣒⡒⠛⠽⢯⣥⣶⣯⠭⡵⢊⣩⣭⣲⡂⡗⠈⠉⠉⠉⠉⡇⣼⣷⣿⣧⡇
-⣮⣍⣛⡛⠛⠛⠛⠛⠛⠘⡾⣴⣿⣿⣿⣿⣧⡇⠀⠀⠀⢀⣰⣠⡽⣿⣿⠟⠀
-⠾⠿⣶⣦⣭⣍⣹⣷⡄⡸⣹⣿⡿⣿⣻⣿⡿⠷⠶⠟⠛⠛⠉⠉⠓⠻⠟⠀⠀
+⣮⣍⣛⡛⠛⠛⠛⠛⠛⠘⡾⣴⣿⣿⣧⡇⠀⠀⠀⢀⣰⣠⡽⣿⣿⠟⠀
+⠾⠿⣶⣦⣭⣍⣹⣷⡄⡸⣹⣿⡿⣿⣻⣿⡿⠷⠶⠟⠛⠉⠉⠓⠻⠟⠀⠀
 ⠀⠀⠀⠉⠉⠁⠉⠛⠛⠛⠳⠿⢿⡿⠟⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n'''},
           ),
           EpsonPrintCommand(
@@ -496,175 +496,6 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  Future<void> _testDirectBluetoothConnection() async {
-    try {
-      print('DEBUG: Looking for already paired Bluetooth printer TM-m30III_004541...');
-      
-      // Disconnect from current printer if connected
-      if (_isConnected) {
-        print('DEBUG: Disconnecting from current printer before new connection...');
-        await EpsonPrinter.disconnect();
-        setState(() {
-          _isConnected = false;
-        });
-        await Future.delayed(const Duration(milliseconds: 500));
-      }
-      
-      // First, try to find already paired Bluetooth devices (this runs on background thread)
-      print('DEBUG: Searching for paired Bluetooth printers...');
-      
-      final pairedPrinters = await EpsonPrinter.findPairedBluetoothPrinters();
-      
-      print('DEBUG: Found ${pairedPrinters.length} paired Bluetooth printers: $pairedPrinters');
-      
-      // Look for our specific printer
-      String? targetPrinter;
-      for (final printer in pairedPrinters) {
-        print('DEBUG: Checking paired printer: $printer');
-        if (printer.contains('TM-m30III') || printer.contains('004541')) {
-          targetPrinter = printer;
-          print('DEBUG: Found target printer: $targetPrinter');
-          break;
-        }
-      }
-      
-      if (targetPrinter == null) {
-        // If not found in paired devices, try manual connection with BD address format
-        print('DEBUG: Printer not found in paired devices, trying direct BD/BLE connection...');
-        
-        // Try known identifiers in order: BLE by name (iOS-friendly), then BD address variants
-        final possibleIdentifiers = [
-          'BLE:TM-m30III_004541',      // BLE by advertised device name (iOS typically requires name for BLE)
-          'TM-m30III_004541',          // Name without prefix (we'll try as BLE below)
-          'A6:D7:3C:AA:CA:01',         // BD address from self-print (Classic BT)
-          'BT:A6:D7:3C:AA:CA:01',      // Classic BT with prefix
-          'BLE:A6:D7:3C:AA:CA:01',     // BLE with BD (may fail on iOS)
-        ];
-        
-        bool connected = false;
-        
-        for (final identifier in possibleIdentifiers) {
-          try {
-            print('DEBUG: Trying connection with identifier: $identifier');
-            
-            EpsonPortType portType;
-            String cleanIdentifier;
-            
-            if (identifier.startsWith('BT:')) {
-              portType = EpsonPortType.bluetooth;
-              cleanIdentifier = identifier.substring(3);
-            } else if (identifier.startsWith('BLE:')) {
-              portType = EpsonPortType.bluetoothLe;
-              cleanIdentifier = identifier.substring(4);
-            } else {
-              // If no prefix provided, try BLE by name first
-              portType = EpsonPortType.bluetoothLe;
-              cleanIdentifier = identifier;
-            }
-            
-            final settings = EpsonConnectionSettings(
-              portType: portType,
-              identifier: cleanIdentifier,
-              timeout: 15000,
-            );
-            
-            print('DEBUG: Connection settings - Port: $portType, Target: ${settings.targetString}');
-            
-            await EpsonPrinter.connect(settings);
-            connected = true;
-            
-            setState(() {
-              _isConnected = true;
-              // Add to discovered printers list
-              final directPrinter = '${settings.targetString}:TM-m30III_004541';
-              if (!_discoveredPrinters.contains(directPrinter)) {
-                _discoveredPrinters.add(directPrinter);
-                _selectedPrinter = directPrinter;
-              }
-            });
-            
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Direct connection successful: ${settings.targetString}')),
-            );
-            
-            return;
-            
-          } catch (e) {
-            print('DEBUG: Connection failed with $identifier: $e');
-            continue;
-          }
-        }
-        
-        if (!connected) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Could not find or connect. Ensure printer is paired/on and BLE mode if using BLE.')),
-          );
-        }
-        
-      } else {
-        // Found in paired devices, try to connect
-        print('DEBUG: Attempting to connect to paired printer: $targetPrinter');
-        
-        // Parse the target from the paired printer string
-        final lastColonIndex = targetPrinter.lastIndexOf(':');
-        String target;
-        if (lastColonIndex != -1) {
-          target = targetPrinter.substring(0, lastColonIndex);
-        } else {
-          target = targetPrinter;
-        }
-        
-        // Determine port type
-        EpsonPortType portType;
-        if (target.startsWith('BT:')) {
-          portType = EpsonPortType.bluetooth;
-        } else if (target.startsWith('BLE:')) {
-          portType = EpsonPortType.bluetoothLe;
-        } else {
-          portType = EpsonPortType.bluetoothLe; // Default to BLE
-        }
-        
-        try {
-          final settings = EpsonConnectionSettings(
-            portType: portType,
-            identifier: target,
-            timeout: 15000,
-          );
-          
-          await EpsonPrinter.connect(settings);
-          
-          setState(() {
-            _isConnected = true;
-            if (!_discoveredPrinters.contains(targetPrinter!)) {
-              _discoveredPrinters.add(targetPrinter);
-              _selectedPrinter = targetPrinter;
-            }
-          });
-          
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Successfully connected to paired printer: ${targetPrinter.split(':').last}')),
-          );
-          
-        } catch (e) {
-          print('DEBUG: Connection to paired printer failed: $e');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Connection to paired printer failed: $e')),
-          );
-        }
-      }
-      
-    } catch (e) {
-      print('DEBUG: Paired Bluetooth search error: $e');
-      setState(() {
-        _isConnected = false;
-      });
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Paired Bluetooth search failed: $e')),
-      );
-    }
-  }
-
   Future<void> _discoverUsbPrinters() async {
     try {
       final printers = await EpsonPrinter.discoverUsbPrinters();
@@ -688,55 +519,6 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
   }
-
-  // Future<void> _testDirectConnection() async {
-  //   try {
-  //     print('DEBUG: Testing direct connection to TSP100 at 10.20.30.125...');
-      
-  //     // Disconnect from current printer if connected
-  //     if (_isConnected) {
-  //       await StarPrinter.disconnect();
-  //       setState(() {
-  //         _isConnected = false;
-  //       });
-  //       await Future.delayed(const Duration(milliseconds: 500));
-  //     }
-      
-  //     final settings = StarConnectionSettings(
-  //       interfaceType: StarInterfaceType.lan,
-  //       identifier: '10.20.30.125',
-  //     );
-      
-  //     await StarPrinter.connect(settings);
-  //     setState(() {
-  //       _isConnected = true;
-  //       // Add to discovered printers list if not already there
-  //       final directPrinter = 'LAN:10.20.30.125:TSP100';
-  //       if (!_discoveredPrinters.contains(directPrinter)) {
-  //         _discoveredPrinters.add(directPrinter);
-  //         _selectedPrinter = directPrinter;
-  //       }
-  //     });
-      
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       const SnackBar(content: Text('Direct connection to TSP100 successful!')),
-  //     );
-  //   } catch (e) {
-  //     print('DEBUG: Direct connection failed: $e');
-  //     setState(() {
-  //       _isConnected = false;
-  //     });
-      
-  //     String message = 'Direct connection failed: $e';
-  //     if (e.toString().contains('network') || e.toString().contains('timeout')) {
-  //       message = 'Network error: Cannot reach TSP100 at 10.20.30.125. Check if tablet and printer are on same network.';
-  //     }
-      
-  //     ScaffoldMessenger.of(context).showSnackBar(
-  //       SnackBar(content: Text(message)),
-  //     );
-  //   }
-  // }
 
   @override
   Widget build(BuildContext context) {
@@ -874,10 +656,6 @@ class _MyHomePageState extends State<MyHomePage> {
                         ElevatedButton(
                           onPressed: _pairBluetooth,
                           child: const Text('Pair Bluetooth'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _testDirectBluetoothConnection,
-                          child: const Text('Find Paired BT'),
                         ),
                         ElevatedButton(
                           onPressed: _selectedPrinter != null && !_isConnected
