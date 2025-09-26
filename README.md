@@ -11,10 +11,11 @@ Tested:
 
 | Device      | TM-m30III |
 |-------------|--------|
-| iOS         |   LAN, Bluetooth     | 
+| iOS         |   LAN, Bluetooth, usb     | 
 | Android     |  LAN      |
 
 
 ## TODO
 1. Need a cash drawer to test. 
 2. Going to bundle all bluetooth connection into one button, as opposed to seperate flows for pre-connected vs disconnect printers.
+3. Generic discovery/connecting button for all 3 interfaces. 
