@@ -8,12 +8,10 @@ buildscript {
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.1.0'
-        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10'
     }
 }
 
 apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
 
 android {
     namespace 'com.example.epson_printer_android'
@@ -26,28 +24,26 @@ android {
     }
 
     sourceSets {
-        main.java.srcDirs += 'src/main/kotlin'
+        main.java.srcDirs += 'src/main/java'
+        main.jniLibs.srcDirs = ['src/main/jniLibs']
+        main.res.srcDirs = ['src/main/res']
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = '11'
-    }
 }
 
 repositories {
     google()
     mavenCentral()
-    maven { url 'https://maven.google.com' }
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.10"
     implementation 'androidx.annotation:annotation:1.7.1'
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'com.google.android.material:material:1.11.0'
-    // Epson ePOS2 AAR will be added locally in libs/ or via flatDir
+    implementation 'androidx.core:core:1.12.0'
+    // Directly reference Epson SDK jars in libs/
+    implementation files('libs/ePOS2.jar')
+    implementation files('libs/ePOSEasySelect.jar')
 }

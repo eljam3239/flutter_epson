@@ -10,27 +10,11 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Flutter Demo',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
       home: const MyHomePage(title: 'Flutter Demo Home Page'),
@@ -40,16 +24,6 @@ class MyApp extends StatelessWidget {
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
   final String title;
 
   @override
@@ -61,55 +35,38 @@ class _MyHomePageState extends State<MyHomePage> {
   List<String> _discoveredPrinters = [];
   bool _isConnected = false;
   String _printerStatus = 'Unknown';
-  String? _selectedPrinter; // Add selected printer tracking
-  bool _openDrawerAfterPrint = true; // Option to auto-open drawer after printing
+  String? _selectedPrinter;
+  bool _openDrawerAfterPrint = true;
 
   @override
   void initState() {
     super.initState();
-    _checkAndRequestPermissions();
+    // Defer Bluetooth permission requests to Bluetooth actions.
   }
 
   Future<void> _checkAndRequestPermissions() async {
-    // Only check Bluetooth permissions on Android - iOS handles this differently
     if (Platform.isAndroid) {
-      // Check if we need to request Bluetooth permissions
       final bluetoothStatus = await Permission.bluetoothConnect.status;
       final bluetoothScanStatus = await Permission.bluetoothScan.status;
-      
+
       if (!bluetoothStatus.isGranted || !bluetoothScanStatus.isGranted) {
-        print('DEBUG: Bluetooth permissions not granted, requesting...');
-        
-        // Request permissions
         final results = await [
           Permission.bluetoothConnect,
           Permission.bluetoothScan,
-          Permission.location, // Also needed for Bluetooth discovery on some devices
+          Permission.location,
         ].request();
-        
-        results.forEach((permission, status) {
-          print('DEBUG: Permission $permission: $status');
-        });
-        
-        if (results[Permission.bluetoothConnect]?.isGranted == true) {
-          print('DEBUG: Bluetooth permissions granted');
-        } else {
-          print('DEBUG: Bluetooth permissions still denied');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Bluetooth permissions are required for printer discovery. Please enable them in settings.'),
-                duration: Duration(seconds: 5),
-              ),
-            );
-          }
+
+        if (results[Permission.bluetoothConnect]?.isGranted != true ||
+            results[Permission.bluetoothScan]?.isGranted != true) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Bluetooth permissions are required for printer discovery. Please enable them in settings.'),
+              duration: Duration(seconds: 5),
+            ),
+          );
         }
-      } else {
-        print('DEBUG: Bluetooth permissions already granted');
       }
-    } else {
-      // iOS - Bluetooth permissions are handled automatically by the system
-      print('DEBUG: Running on iOS - Bluetooth permissions handled by system');
     }
   }
 
@@ -121,73 +78,35 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _discoverPrinters() async {
     try {
-      print('DEBUG: Starting printer discovery...');
-      print('DEBUG: Looking for printers on network.');
-      // Check permissions first - only on Android
-      if (Platform.isAndroid) {
-        final bluetoothConnectStatus = await Permission.bluetoothConnect.status;
-        final bluetoothScanStatus = await Permission.bluetoothScan.status;
-        
-        if (!bluetoothConnectStatus.isGranted || !bluetoothScanStatus.isGranted) {
-          print('DEBUG: Bluetooth permissions not granted, requesting again...');
-          await _checkAndRequestPermissions();
-          
-          // Check again after request
-          final newBluetoothConnectStatus = await Permission.bluetoothConnect.status;
-          if (!newBluetoothConnectStatus.isGranted) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Bluetooth permissions required. Please enable in Android Settings > Apps > test_star > Permissions'),
-                  action: SnackBarAction(
-                    label: 'Open Settings',
-                    onPressed: () => openAppSettings(),
-                  ),
-                  duration: const Duration(seconds: 8),
-                ),
-              );
-            }
-            return;
-          }
-        }
-      }
       final printers = await EpsonPrinter.discoverPrinters();
-      print('DEBUG: Discovery result: $printers');
       setState(() {
         _discoveredPrinters = printers;
-        // Auto-select first printer if none selected or if current selection is no longer available
         if (_selectedPrinter == null || !printers.contains(_selectedPrinter)) {
           _selectedPrinter = printers.isNotEmpty ? printers.first : null;
         }
       });
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Found ${printers.length} printers')),
       );
     } catch (e) {
-      print('DEBUG: Discovery error: $e');
-      String message = 'Discovery failed: $e';
-      
-      if (e.toString().contains('BLUETOOTH_PERMISSION_DENIED')) {
-        message = 'Bluetooth permissions required. Please grant permissions and try again.';
-      } else if (e.toString().contains('BLUETOOTH_UNAVAILABLE')) {
-        message = 'Bluetooth is not available or disabled. Please enable Bluetooth.';
-      }
-      
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
+        SnackBar(content: Text('Discovery failed: $e')),
       );
     }
   }
 
   Future<void> _connectToPrinter() async {
     if (_discoveredPrinters.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No printers discovered. Please discover printers first.')),
       );
       return;
     }
-
     if (_selectedPrinter == null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select a printer first.')),
       );
@@ -197,15 +116,16 @@ class _MyHomePageState extends State<MyHomePage> {
     try {
       if (_isConnected) {
         await EpsonPrinter.disconnect();
-        setState(() { _isConnected = false; });
+        setState(() => _isConnected = false);
         await Future.delayed(const Duration(milliseconds: 500));
       }
 
       final printerString = _selectedPrinter!;
       final lastColonIndex = printerString.lastIndexOf(':');
-      String target = lastColonIndex != -1 ? printerString.substring(0, lastColonIndex) : printerString;
+      String target = lastColonIndex != -1
+          ? printerString.substring(0, lastColonIndex)
+          : printerString;
 
-      // Determine interface type, fixing bare MAC handling
       EpsonPortType interfaceType;
       final macRegex = RegExp(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$');
       if (target.startsWith('TCP:') || target.startsWith('TCPS:')) {
@@ -217,7 +137,6 @@ class _MyHomePageState extends State<MyHomePage> {
       } else if (target.startsWith('USB:')) {
         interfaceType = EpsonPortType.usb;
       } else if (macRegex.hasMatch(target)) {
-        // Bare MAC -> Classic BT
         interfaceType = EpsonPortType.bluetooth;
         target = 'BT:$target';
       } else {
@@ -231,12 +150,14 @@ class _MyHomePageState extends State<MyHomePage> {
       );
 
       await EpsonPrinter.connect(settings);
-      setState(() { _isConnected = true; });
+      setState(() => _isConnected = true);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last}')),
       );
     } catch (e) {
-      setState(() { _isConnected = false; });
+      setState(() => _isConnected = false);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Connection failed: $e')),
       );
@@ -249,7 +170,6 @@ class _MyHomePageState extends State<MyHomePage> {
       final target = res['target'] as String?;
       final code = res['resultCode'];
       if (target != null && target.isNotEmpty) {
-        // Add paired target to list and select it
         setState(() {
           final entry = '$target:PairedPrinter';
           if (!_discoveredPrinters.contains(entry)) {
@@ -257,15 +177,18 @@ class _MyHomePageState extends State<MyHomePage> {
           }
           _selectedPrinter = entry;
         });
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Paired: $target (code=$code)')),
         );
       } else {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Pairing failed (code=$code)')),
         );
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Pairing error: $e')),
       );
@@ -273,97 +196,43 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _printReceipt() async {
-    print('DEBUG: Print receipt button pressed');
-    
     if (!_isConnected) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please connect to a printer first')),
       );
       return;
     }
-    
+
     try {
-      print('DEBUG: Creating Epson print job...');
-      
       final printJob = EpsonPrintJob(
         commands: [
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'data': 'EPSON PRINTER TEST\n'},
-          ),
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'data': '================\n'},
-          ),
-          EpsonPrintCommand(
-            type: EpsonCommandType.feed,
-            parameters: {'line': 1},
-          ),
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'data': 'Counter: $_counter\n'},
-          ),
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'data': 'Test Print Success!\n'},
-          ),
-          EpsonPrintCommand(
-            type: EpsonCommandType.feed,
-            parameters: {'line': 2},
-          ),
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'data': 'Thank you!\n'},
-          ),
-          EpsonPrintCommand(
-            type: EpsonCommandType.text,
-            parameters: {'data': '''⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-            ⢀⣀⣀⣤⣤⣄⣄⣀⣀⣀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⡴⠊⠉⠉⠉⠉⠉⣩⡷⠋⠉⠹⡛⢽⠢⣀⣀⡀⠀
-⢀⣀⣤⣴⠶⣾⣿⡿⠯⠯⣍⣙⣒⣲⠶⠶⠶⡿⢴⠧⠷⠒⣿⣏⠡⡤⠤⠯⡆
-⣿⣶⣒⡒⠛⠽⢯⣥⣶⣯⠭⡵⢊⣩⣭⣲⡂⡗⠈⠉⠉⠉⠉⡇⣼⣷⣿⣧⡇
-⣮⣍⣛⡛⠛⠛⠛⠛⠛⠘⡾⣴⣿⣿⣧⡇⠀⠀⠀⢀⣰⣠⡽⣿⣿⠟⠀
-⠾⠿⣶⣦⣭⣍⣹⣷⡄⡸⣹⣿⡿⣿⣻⣿⡿⠷⠶⠟⠛⠉⠉⠓⠻⠟⠀⠀
-⠀⠀⠀⠉⠉⠁⠉⠛⠛⠛⠳⠿⢿⡿⠟⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n'''},
-          ),
-          EpsonPrintCommand(
-            type: EpsonCommandType.feed,
-            parameters: {'line': 1},
-          ),
-          EpsonPrintCommand(
-            type: EpsonCommandType.cut,
-            parameters: {},
-          ),
+          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'EPSON PRINTER TEST\n'}),
+          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': '================\n'}),
+          EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
+          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Counter: $_counter\n'}),
+          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Test Print Success!\n'}),
+          EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 2}),
+          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Thank you!\n'}),
+          EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
+          EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}),
         ],
       );
-      
-      print('DEBUG: Sending print job to Epson printer...');
+
       await EpsonPrinter.printReceipt(printJob);
-      
-      print('DEBUG: Print job completed successfully');
-      
-      // Optionally open cash drawer after successful print
+
       if (_openDrawerAfterPrint && _isConnected) {
         try {
-          print('DEBUG: Auto-opening cash drawer after print...');
           await EpsonPrinter.openCashDrawer();
-          print('DEBUG: Auto cash drawer opened successfully');
-        } catch (drawerError) {
-          print('DEBUG: Auto cash drawer failed: $drawerError');
-          // Don't fail the whole operation if drawer fails
-        }
+        } catch (_) {}
       }
-      
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_openDrawerAfterPrint 
-            ? 'Print job sent and drawer opened' 
-            : 'Print job sent successfully')),
+        SnackBar(content: Text(_openDrawerAfterPrint ? 'Print job sent and drawer opened' : 'Print job sent successfully')),
       );
     } catch (e) {
-      print('DEBUG: Print failed with error: $e');
-      print('DEBUG: Error type: ${e.runtimeType}');
-      print('DEBUG: Error details: ${e.toString()}');
-      
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Print failed: $e')),
       );
@@ -373,14 +242,13 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _disconnectFromPrinter() async {
     try {
       await EpsonPrinter.disconnect();
-      setState(() {
-        _isConnected = false;
-      });
+      setState(() => _isConnected = false);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Disconnected from printer')),
       );
     } catch (e) {
-      print('DEBUG: Disconnect error: $e');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Disconnect failed: $e')),
       );
@@ -402,21 +270,20 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _openCashDrawer() async {
     if (!_isConnected) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please connect to a printer first')),
       );
       return;
     }
-
     try {
-      print('DEBUG: Opening cash drawer...');
       await EpsonPrinter.openCashDrawer();
-      print('DEBUG: Cash drawer command sent successfully');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Cash drawer opened')),
       );
     } catch (e) {
-      print('DEBUG: Cash drawer error: $e');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Cash drawer failed: $e')),
       );
@@ -425,71 +292,51 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _discoverBluetoothPrinters() async {
     try {
-      print('DEBUG: Starting Bluetooth printer discovery...');
-      print('DEBUG: Looking for Bluetooth printers.');
-      
-      // Check permissions first - only on Android
       if (Platform.isAndroid) {
         final bluetoothConnectStatus = await Permission.bluetoothConnect.status;
         final bluetoothScanStatus = await Permission.bluetoothScan.status;
-        
         if (!bluetoothConnectStatus.isGranted || !bluetoothScanStatus.isGranted) {
-          print('DEBUG: Bluetooth permissions not granted, requesting again...');
           await _checkAndRequestPermissions();
-          
-          // Check again after request
-          final newBluetoothConnectStatus = await Permission.bluetoothConnect.status;
-          if (!newBluetoothConnectStatus.isGranted) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Bluetooth permissions required for Bluetooth discovery'),
-                  action: SnackBarAction(
-                    label: 'Open Settings',
-                    onPressed: () => openAppSettings(),
-                  ),
-                  duration: const Duration(seconds: 8),
-                ),
-              );
-            }
+          final newConnect = await Permission.bluetoothConnect.status;
+          final newScan = await Permission.bluetoothScan.status;
+          if (!newConnect.isGranted || !newScan.isGranted) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Bluetooth permissions required for Bluetooth discovery'),
+                action: SnackBarAction(label: 'Open Settings', onPressed: () => openAppSettings()),
+                duration: const Duration(seconds: 8),
+              ),
+            );
             return;
           }
         }
       }
-      
+
       final printers = await EpsonPrinter.discoverBluetoothPrinters();
-      print('DEBUG: Bluetooth discovery result: $printers');
-      
       setState(() {
-        // Add Bluetooth printers to the existing list (or replace if you prefer)
         final bluetoothPrinters = printers.where((p) => p.startsWith('BT:') || p.startsWith('BLE:')).toList();
-        
-        // Create a new mutable list from existing printers, removing Bluetooth ones
         final updatedPrinters = List<String>.from(_discoveredPrinters);
         updatedPrinters.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
         updatedPrinters.addAll(bluetoothPrinters);
-        
         _discoveredPrinters = updatedPrinters;
-        
-        // Auto-select first Bluetooth printer if none selected
         if (_selectedPrinter == null || !_discoveredPrinters.contains(_selectedPrinter)) {
           _selectedPrinter = _discoveredPrinters.isNotEmpty ? _discoveredPrinters.first : null;
         }
       });
-      
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Found ${printers.length} Bluetooth printers')),
       );
     } catch (e) {
-      print('DEBUG: Bluetooth discovery error: $e');
-      String message = 'Bluetooth discovery failed: $e';
-      
+      var message = 'Bluetooth discovery failed: $e';
       if (e.toString().contains('BLUETOOTH_PERMISSION_DENIED')) {
         message = 'Bluetooth permissions required. Please grant permissions and try again.';
       } else if (e.toString().contains('BLUETOOTH_UNAVAILABLE')) {
         message = 'Bluetooth is not available or disabled. Please enable Bluetooth.';
       }
-      
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message)),
       );
@@ -499,9 +346,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _discoverUsbPrinters() async {
     try {
       final printers = await EpsonPrinter.discoverUsbPrinters();
-      print('DEBUG: USB discovery result: $printers');
       setState(() {
-        // Remove existing USB entries then add new ones
         final updated = List<String>.from(_discoveredPrinters);
         updated.removeWhere((p) => p.startsWith('USB:'));
         updated.addAll(printers.where((p) => p.startsWith('USB:')));
@@ -510,10 +355,12 @@ class _MyHomePageState extends State<MyHomePage> {
           _selectedPrinter = _discoveredPrinters.first;
         }
       });
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Found ${printers.length} USB printers')),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('USB discovery failed: $e')),
       );
@@ -537,22 +384,13 @@ class _MyHomePageState extends State<MyHomePage> {
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Counter Demo',
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
+                  children: <Widget>[
+                    Text('Counter Demo', style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 8),
                     const Text('You have pushed the button this many times:'),
-                    Text(
-                      '$_counter',
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
+                    Text('$_counter', style: Theme.of(context).textTheme.headlineMedium),
                     const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: _incrementCounter,
-                      child: const Text('Increment Counter'),
-                    ),
+                    ElevatedButton(onPressed: _incrementCounter, child: const Text('Increment Counter')),
                   ],
                 ),
               ),
@@ -563,11 +401,8 @@ class _MyHomePageState extends State<MyHomePage> {
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Epson Printer Controls',
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
+                  children: <Widget>[
+                    Text('Epson Printer Controls', style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 16),
                     Text('Discovered Printers: ${_discoveredPrinters.length}'),
                     if (_discoveredPrinters.isNotEmpty) ...[
@@ -587,11 +422,9 @@ class _MyHomePageState extends State<MyHomePage> {
                             hint: const Text('Select a printer'),
                             isExpanded: true,
                             items: _discoveredPrinters.map((printer) {
-                              // Extract model name for display
                               final parts = printer.split(':');
                               final model = parts.length > 2 ? parts[2] : 'Unknown';
                               final mac = parts.length > 1 ? parts[1] : 'Unknown';
-                              // Safely truncate MAC address to avoid range errors
                               final displayMac = mac.length > 8 ? '${mac.substring(0, 8)}...' : mac;
                               return DropdownMenuItem<String>(
                                 value: printer,
@@ -601,7 +434,7 @@ class _MyHomePageState extends State<MyHomePage> {
                             onChanged: (String? newValue) {
                               setState(() {
                                 _selectedPrinter = newValue;
-                                _isConnected = false; // Reset connection status when changing printer
+                                _isConnected = false;
                               });
                             },
                           ),
@@ -609,8 +442,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                       const SizedBox(height: 8),
                       if (_selectedPrinter != null)
-                        Text('Selected: ${_selectedPrinter!}', 
-                             style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
+                        Text('Selected: ${_selectedPrinter!}', style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic)),
                     ],
                     const SizedBox(height: 16),
                     Text('Connection Status: ${_isConnected ? "Connected" : "Disconnected"}'),
@@ -627,58 +459,24 @@ class _MyHomePageState extends State<MyHomePage> {
                             });
                           },
                         ),
-                        const Expanded(
-                          child: Text('Auto-open cash drawer after printing'),
-                        ),
+                        const Expanded(child: Text('Auto-open cash drawer after printing')),
                       ],
                     ),
                     const SizedBox(height: 16),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
-                      children: [
-                        ElevatedButton(
-                          onPressed: _checkAndRequestPermissions,
-                          child: const Text('Check Permissions'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _discoverPrinters,
-                          child: const Text('Discover LAN'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _discoverBluetoothPrinters,
-                          child: const Text('Discover Bluetooth'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _discoverUsbPrinters,
-                          child: const Text('Discover USB'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _pairBluetooth,
-                          child: const Text('Pair Bluetooth'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _selectedPrinter != null && !_isConnected
-                              ? _connectToPrinter
-                              : null,
-                          child: const Text('Connect'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _isConnected ? _disconnectFromPrinter : null,
-                          child: const Text('Disconnect'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _isConnected ? _printReceipt : null,
-                          child: const Text('Print Test Receipt'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _getStatus,
-                          child: const Text('Get Status'),
-                        ),
-                        ElevatedButton(
-                          onPressed: _isConnected ? _openCashDrawer : null,
-                          child: const Text('Open Cash Drawer'),
-                        ),
+                      children: <Widget>[
+                        ElevatedButton(onPressed: _checkAndRequestPermissions, child: const Text('Check Permissions')),
+                        ElevatedButton(onPressed: _discoverPrinters, child: const Text('Discover LAN')),
+                        ElevatedButton(onPressed: _discoverBluetoothPrinters, child: const Text('Discover Bluetooth')),
+                        ElevatedButton(onPressed: _discoverUsbPrinters, child: const Text('Discover USB')),
+                        ElevatedButton(onPressed: _pairBluetooth, child: const Text('Pair Bluetooth')),
+                        ElevatedButton(onPressed: _selectedPrinter != null && !_isConnected ? _connectToPrinter : null, child: const Text('Connect')),
+                        ElevatedButton(onPressed: _isConnected ? _disconnectFromPrinter : null, child: const Text('Disconnect')),
+                        ElevatedButton(onPressed: _isConnected ? _printReceipt : null, child: const Text('Print Test Receipt')),
+                        ElevatedButton(onPressed: _getStatus, child: const Text('Get Status')),
+                        ElevatedButton(onPressed: _isConnected ? _openCashDrawer : null, child: const Text('Open Cash Drawer')),
                       ],
                     ),
                   ],
@@ -693,7 +491,7 @@ class _MyHomePageState extends State<MyHomePage> {
         onPressed: _incrementCounter,
         tooltip: 'Increment',
         child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      ),
     );
   }
 }
