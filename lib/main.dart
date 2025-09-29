@@ -211,7 +211,11 @@ class _MyHomePageState extends State<MyHomePage> {
           EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': '================\n'}),
           EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
           EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Counter: $_counter\n'}),
-          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Test Print Success!\n'}),
+          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': ''' 
+ |\__/,|   (`\
+ |_ _  |.--.) )
+ ( T   )     /
+(((^_(((/(((_/\n '''}),
           EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 2}),
           EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Thank you!\n'}),
           EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),

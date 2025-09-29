@@ -66,7 +66,7 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         disconnectPrinter(result);
         break;
       case "printReceipt":
-        result.error("UNIMPLEMENTED", "printReceipt not implemented on Android yet", null);
+        printReceipt(call, result);
         break;
       case "getStatus":
         // Minimal status until full mapping is implemented
@@ -222,6 +222,80 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
     }
   }
 
+  // Build commands and send print job
+  private void printReceipt(@NonNull MethodCall call, @NonNull Result result) {
+    if (mPrinter == null) {
+      result.error("NOT_CONNECTED", "Printer is not connected", null);
+      return;
+    }
+
+    @SuppressWarnings("unchecked")
+    Map<String, Object> args = (Map<String, Object>) call.arguments;
+    if (args == null) {
+      result.error("INVALID_ARGS", "Missing print job", null);
+      return;
+    }
+
+    @SuppressWarnings("unchecked")
+    List<Object> commands = (List<Object>) args.get("commands");
+    if (commands == null) {
+      result.error("INVALID_ARGS", "Missing commands", null);
+      return;
+    }
+
+    // Run on a background thread to avoid blocking the platform channel
+    new Thread(() -> {
+      try {
+        synchronized (EpsonPrinterAndroidPlugin.this) {
+          mPrinter.clearCommandBuffer();
+
+          for (Object item : commands) {
+            if (!(item instanceof Map)) continue;
+            @SuppressWarnings("unchecked")
+            Map<String, Object> cmd = (Map<String, Object>) item;
+            String type = String.valueOf(cmd.get("type"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = (Map<String, Object>) cmd.get("parameters");
+            if (params == null) params = new HashMap<>();
+
+            switch (type) {
+              case "text":
+              case "addText": {
+                String data = String.valueOf(params.getOrDefault("data", ""));
+                if (data != null) {
+                  mPrinter.addText(data);
+                }
+                break;
+              }
+              case "feed": {
+                int line = getInt(params.get("line"), getInt(params.get("lines"), 1));
+                if (line < 1) line = 1;
+                mPrinter.addFeedLine(line);
+                break;
+              }
+              case "cut": {
+                mPrinter.addCut(Printer.CUT_FEED);
+                break;
+              }
+              // Additional commands (barcode/qrCode/image/pulse/beep/layout) can be added later
+              default:
+                // Ignore unknown commands for now
+                break;
+            }
+          }
+
+          // Send data
+          mPrinter.sendData(Printer.PARAM_DEFAULT);
+        }
+        runOnMain(() -> result.success(null));
+      } catch (Epos2Exception e) {
+        runOnMain(() -> result.error("PRINT_FAILED", "Epson SDK error: " + e.getMessage(), e.getErrorStatus()));
+      } catch (Exception ex) {
+        runOnMain(() -> result.error("PRINT_FAILED", ex.getMessage(), null));
+      }
+    }).start();
+  }
+
   private void safeDisposePrinter() {
     if (mPrinter != null) {
       try { mPrinter.disconnect(); } catch (Exception ignored) {}
@@ -233,7 +307,12 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
 
   private int getInt(Object obj, int def) {
     if (obj instanceof Number) return ((Number) obj).intValue();
+    try { return Integer.parseInt(String.valueOf(obj)); } catch (Exception ignored) {}
     return def;
+  }
+
+  private void runOnMain(Runnable r) {
+    new android.os.Handler(android.os.Looper.getMainLooper()).post(r);
   }
 
   // Map platform enum EpsonPrinterSeries -> Epson Android Printer series constant
