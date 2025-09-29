@@ -10,7 +10,7 @@ Flutter wrapper for Epson iOS SDK.
 Tested:
 
 | Device      | TM-m30III | Cash Drawer |
-|-------------|--------|
+|-------------|--------|--------|
 | iOS         |   LAN, Bluetooth (pre-connected, in-app pairing), usb     | yes |
 | Android     |  LAN, Bluetooth (pre-connected)   | yes |
 
@@ -18,6 +18,4 @@ Cannot connect to Bluetooth while printer is wired via USB -- even if the user D
 
 
 ## TODO
-1. Need a cash drawer to test. 
-2. Going to bundle all bluetooth connection into one button, as opposed to seperate flows for pre-connected vs disconnect printers.
-3. Generic discovery/connecting button for all 3 interfaces. 
+1. Generic discovery/connecting button for all 3 interfaces. 
