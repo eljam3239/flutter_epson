@@ -14,6 +14,8 @@ Tested:
 | iOS         |   LAN, Bluetooth (pre-connected, in-app pairing), usb     | yes |
 | Android     |  LAN, Bluetooth (pre-connected)   | yes |
 
+Cannot connect to Bluetooth while printer is wired via USB -- even if the user Disconnects from the usb connection in-app
+
 
 ## TODO
 1. Need a cash drawer to test. 
