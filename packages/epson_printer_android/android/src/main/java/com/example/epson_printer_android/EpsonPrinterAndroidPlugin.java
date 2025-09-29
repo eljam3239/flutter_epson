@@ -55,7 +55,7 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         discoverBluetoothPrinters(result);
         break;
       case "discoverUsbPrinters":
-        result.success(Collections.emptyList());
+        discoverUsbPrinters(result);
         break;
       case "pairBluetoothDevice":
         pairBluetoothDevice(result);
@@ -265,9 +265,9 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
             : (prefix + identifier);
       }
 
-      // Support TCP and Bluetooth (Classic)
-      if (!(target.startsWith("TCP:") || target.startsWith("BT:"))) {
-        result.error("UNSUPPORTED", "Only TCP/BT connection is supported on Android right now", null);
+      // Support TCP, Bluetooth (Classic), and USB
+      if (!(target.startsWith("TCP:") || target.startsWith("BT:") || target.startsWith("USB:"))) {
+        result.error("UNSUPPORTED", "Only TCP/BT/USB connection is supported on Android right now", null);
         return;
       }
 
@@ -470,6 +470,53 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
       payload.put("resultCode", cleaned != null ? 0 : -1);
       result.success(payload);
     }, 3500);
+  }
+
+  // Discover USB printers using Epson Discovery
+  private void discoverUsbPrinters(@NonNull Result result) {
+    final List<String> found = new ArrayList<>();
+
+    final FilterOption filter = new FilterOption();
+    filter.setDeviceType(Discovery.TYPE_PRINTER);
+    filter.setPortType(Discovery.PORTTYPE_USB);
+    filter.setEpsonFilter(Discovery.FILTER_NAME);
+
+    final DiscoveryListener listener = new DiscoveryListener() {
+      @Override
+      public void onDiscovery(final DeviceInfo deviceInfo) {
+        synchronized (found) {
+          String target = deviceInfo.getTarget();
+          String name = deviceInfo.getDeviceName();
+          if (target == null || target.isEmpty()) return;
+          if (!target.startsWith("USB:")) target = "USB:" + target;
+          String entry = target + ":" + (name != null ? name : "USB Printer");
+          if (!found.contains(entry)) found.add(entry);
+        }
+      }
+    };
+
+    try {
+      Discovery.start(context, filter, listener);
+    } catch (Exception e) {
+      result.success(Collections.emptyList());
+      return;
+    }
+
+    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+      while (true) {
+        try {
+          Discovery.stop();
+          break;
+        } catch (Epos2Exception e) {
+          if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+            break;
+          }
+        }
+      }
+      synchronized (found) {
+        result.success(new ArrayList<>(found));
+      }
+    }, 4000);
   }
 
   private void openCashDrawer(@NonNull Result result) {
