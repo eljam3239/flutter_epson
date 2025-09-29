@@ -17,17 +17,22 @@ import com.epson.epos2.discovery.DeviceInfo;
 import com.epson.epos2.discovery.Discovery;
 import com.epson.epos2.discovery.DiscoveryListener;
 import com.epson.epos2.discovery.FilterOption;
+import com.epson.epos2.printer.Printer;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /** EpsonPrinterAndroidPlugin */
 public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandler, ActivityAware {
   private MethodChannel channel;
   private Context context;
   private Activity activity;
+
+  // Connection state
+  private Printer mPrinter;
 
   @Override
   public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
@@ -55,25 +60,26 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         result.success(payload);
         break;
       case "connect":
-        result.error("UNIMPLEMENTED", "connect not implemented on Android yet", null);
+        connectPrinter(call, result);
         break;
       case "disconnect":
-        result.success(null);
+        disconnectPrinter(result);
         break;
       case "printReceipt":
         result.error("UNIMPLEMENTED", "printReceipt not implemented on Android yet", null);
         break;
       case "getStatus":
+        // Minimal status until full mapping is implemented
         java.util.Map<String, Object> status = new java.util.HashMap<>();
-        status.put("isOnline", false);
-        status.put("status", "unknown");
+        status.put("isOnline", mPrinter != null);
+        status.put("status", mPrinter != null ? "connected" : "disconnected");
         result.success(status);
         break;
       case "openCashDrawer":
         result.error("UNIMPLEMENTED", "openCashDrawer not implemented on Android yet", null);
         break;
       case "isConnected":
-        result.success(false);
+        result.success(mPrinter != null);
         break;
       default:
         result.notImplemented();
@@ -135,6 +141,128 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         result.success(new ArrayList<>(found));
       }
     }, 5000);
+  }
+
+  private void connectPrinter(@NonNull MethodCall call, @NonNull Result result) {
+    try {
+      @SuppressWarnings("unchecked")
+      Map<String, Object> args = (Map<String, Object>) call.arguments;
+      if (args == null) {
+        result.error("INVALID_ARGS", "Missing connection settings", null);
+        return;
+      }
+
+      // Determine target
+      String target = (String) args.get("targetString");
+      if (target == null || target.isEmpty()) {
+        // Build from identifier + portType
+        String identifier = (String) args.get("identifier");
+        Number portTypeNum = (Number) args.get("portType");
+        int portType = portTypeNum != null ? portTypeNum.intValue() : 1; // default tcp
+        String prefix;
+        switch (portType) {
+          case 1: prefix = "TCP:"; break; // tcp
+          case 2: prefix = "BT:"; break;  // bluetooth
+          case 3: prefix = "USB:"; break; // usb
+          case 4: prefix = "BLE:"; break; // ble
+          default: prefix = "TCP:"; break;
+        }
+        target = (identifier != null && identifier.startsWith("TCP:")) ? identifier : (prefix + identifier);
+      }
+
+      // Only implement TCP for now
+      if (!target.startsWith("TCP:")) {
+        result.error("UNSUPPORTED", "Only TCP connection is implemented on Android right now", null);
+        return;
+      }
+
+      // Disconnect any existing connection
+      safeDisposePrinter();
+
+      // Map series/lang (fallback to TM_M30III + ANK if not provided)
+      int seriesIdx = getInt(args.get("printerSeries"), 29); // tmM30III index in enum
+      int langIdx = getInt(args.get("modelLang"), 0); // ank
+      int seriesConst = mapSeries(seriesIdx);
+      int langConst = mapLang(langIdx);
+
+      mPrinter = new Printer(seriesConst, langConst, context);
+      // Optional: mPrinter.setReceiveEventListener((printerObj, code, status, printJobId) -> {});
+
+      // Connect (PARAM_DEFAULT == 0)
+      mPrinter.connect(target, Printer.PARAM_DEFAULT);
+
+      result.success(null);
+    } catch (Epos2Exception e) {
+      safeDisposePrinter();
+      result.error("CONNECT_FAILED", "Epson SDK error: " + e.getMessage(), e.getErrorStatus());
+    } catch (Exception ex) {
+      safeDisposePrinter();
+      result.error("CONNECT_FAILED", ex.getMessage(), null);
+    }
+  }
+
+  private void disconnectPrinter(@NonNull Result result) {
+    try {
+      if (mPrinter != null) {
+        try {
+          mPrinter.disconnect();
+        } catch (Exception ignored) {}
+        try {
+          mPrinter.clearCommandBuffer();
+        } catch (Exception ignored) {}
+        try {
+          mPrinter.setReceiveEventListener(null);
+        } catch (Exception ignored) {}
+      }
+      mPrinter = null;
+      result.success(null);
+    } catch (Exception e) {
+      mPrinter = null;
+      result.success(null);
+    }
+  }
+
+  private void safeDisposePrinter() {
+    if (mPrinter != null) {
+      try { mPrinter.disconnect(); } catch (Exception ignored) {}
+      try { mPrinter.clearCommandBuffer(); } catch (Exception ignored) {}
+      try { mPrinter.setReceiveEventListener(null); } catch (Exception ignored) {}
+      mPrinter = null;
+    }
+  }
+
+  private int getInt(Object obj, int def) {
+    if (obj instanceof Number) return ((Number) obj).intValue();
+    return def;
+  }
+
+  // Map platform enum EpsonPrinterSeries -> Epson Android Printer series constant
+  private int mapSeries(int idx) {
+    switch (idx) {
+      case 1:  return Printer.TM_M30;      // tmM30
+      case 21: return Printer.TM_M30II;    // tmM30II
+      case 29: return Printer.TM_M30III;   // tmM30III
+      case 12: return Printer.TM_T88;      // tmT88 (generic)
+      case 24: return Printer.TM_T88VII;   // tmT88VII
+      case 15: return Printer.TM_U220;     // tmU220
+      case 23: return Printer.TM_M50;      // tmM50
+      case 30: return Printer.TM_M50II;    // tmM50II
+      default: return Printer.TM_M30III;   // sensible default for modern models
+    }
+  }
+
+  // Map platform enum EpsonModelLang -> Epson Android Printer language constant
+  private int mapLang(int idx) {
+    switch (idx) {
+      case 0:  return Printer.MODEL_ANK;       // ank
+      case 1:  return Printer.MODEL_JAPANESE;  // japanese
+      case 2:  return Printer.MODEL_CHINESE;   // chinese
+      case 3:  return Printer.MODEL_TAIWAN;    // taiwan
+      case 4:  return Printer.MODEL_KOREAN;    // korean
+      case 5:  return Printer.MODEL_THAI;      // thai
+      case 6:  return Printer.MODEL_SOUTHASIA; // southasia
+      default: return Printer.MODEL_ANK;
+    }
   }
 
   @Override
