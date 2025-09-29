@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.content.Context;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbInterface;
+import android.hardware.usb.UsbManager;
 import androidx.annotation.NonNull;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.embedding.engine.plugins.activity.ActivityAware;
@@ -271,6 +274,12 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         return;
       }
 
+      // If attempting BT while an Epson USB device is attached, return a clear error
+      if (target.startsWith("BT:") && isEpsonUsbAttached()) {
+        result.error("USB_ATTACHED", "USB connection detected. Unplug USB to use Bluetooth.", null);
+        return;
+      }
+
       // Timeout from args (ms), default 15000
       int timeout = 15000;
       Object tObj = args.get("timeout");
@@ -303,6 +312,28 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
       safeDisposePrinter();
       result.error("CONNECT_FAILED", ex.getMessage(), null);
     }
+  }
+
+  private boolean isEpsonUsbAttached() {
+    try {
+      UsbManager usbManager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+      if (usbManager == null) return false;
+      Map<String, UsbDevice> devices = usbManager.getDeviceList();
+      if (devices == null || devices.isEmpty()) return false;
+      for (UsbDevice dev : devices.values()) {
+        // Epson Vendor ID
+        if (dev.getVendorId() == 0x04B8) return true;
+        // Or any interface that presents as Printer class
+        int ifaceCount = dev.getInterfaceCount();
+        for (int i = 0; i < ifaceCount; i++) {
+          UsbInterface iface = dev.getInterface(i);
+          if (iface != null && iface.getInterfaceClass() == android.hardware.usb.UsbConstants.USB_CLASS_PRINTER) {
+            return true;
+          }
+        }
+      }
+    } catch (Throwable ignored) {}
+    return false;
   }
 
   private void disconnectPrinter(@NonNull Result result) {
