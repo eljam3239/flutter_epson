@@ -2,6 +2,8 @@ package com.example.epson_printer_android;
 
 import android.app.Activity;
 import android.content.Context;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import androidx.annotation.NonNull;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.embedding.engine.plugins.activity.ActivityAware;
@@ -22,8 +24,10 @@ import com.epson.epos2.printer.Printer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** EpsonPrinterAndroidPlugin */
 public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandler, ActivityAware {
@@ -48,16 +52,13 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         discoverLanPrinters(result);
         break;
       case "discoverBluetoothPrinters":
-        result.success(Collections.emptyList());
+        discoverBluetoothPrinters(result);
         break;
       case "discoverUsbPrinters":
         result.success(Collections.emptyList());
         break;
       case "pairBluetoothDevice":
-        java.util.Map<String, Object> payload = new java.util.HashMap<>();
-        payload.put("target", null);
-        payload.put("resultCode", -1);
-        result.success(payload);
+        pairBluetoothDevice(result);
         break;
       case "connect":
         connectPrinter(call, result);
@@ -76,7 +77,7 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         result.success(status);
         break;
       case "openCashDrawer":
-        result.error("UNIMPLEMENTED", "openCashDrawer not implemented on Android yet", null);
+        openCashDrawer(result);
         break;
       case "isConnected":
         result.success(mPrinter != null);
@@ -143,6 +144,99 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
     }, 5000);
   }
 
+  // Bluetooth discovery (Classic only) + include bonded devices to handle Settings-paired printers
+  private void discoverBluetoothPrinters(@NonNull Result result) {
+    final List<String> found = new ArrayList<>();
+
+    // 1) Seed with bonded devices
+    for (String entry : getBondedBtPrinters()) {
+      if (!found.contains(entry)) found.add(entry);
+    }
+
+    // 2) Active discovery via Epson SDK (may find additional devices)
+    final FilterOption filter = new FilterOption();
+    filter.setDeviceType(Discovery.TYPE_PRINTER);
+    filter.setPortType(Discovery.PORTTYPE_BLUETOOTH);
+    filter.setEpsonFilter(Discovery.FILTER_NAME);
+
+    final DiscoveryListener listener = new DiscoveryListener() {
+      @Override
+      public void onDiscovery(final DeviceInfo deviceInfo) {
+        synchronized (found) {
+          String target = deviceInfo.getTarget();
+          String name = deviceInfo.getDeviceName();
+          String btAddr = deviceInfo.getBdAddress();
+          String prefixTarget = null;
+
+          if (target != null && target.startsWith("BT:")) {
+            prefixTarget = target;
+          } else if (btAddr != null && !btAddr.isEmpty()) {
+            prefixTarget = "BT:" + btAddr;
+          } else if (target != null && !target.isEmpty()) {
+            prefixTarget = target.startsWith("BT:") ? target : ("BT:" + target);
+          }
+
+          if (prefixTarget == null) return;
+
+          String entry = prefixTarget + ":" + (name != null ? name : "Printer");
+          if (!found.contains(entry)) {
+            found.add(entry);
+          }
+        }
+      }
+    };
+
+    try {
+      Discovery.start(context, filter, listener);
+    } catch (Exception e) {
+      // If discovery fails (permissions, BT off), still return bonded list
+      result.success(new ArrayList<>(found));
+      return;
+    }
+
+    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+      while (true) {
+        try {
+          Discovery.stop();
+          break;
+        } catch (Epos2Exception e) {
+          if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+            break;
+          }
+        }
+      }
+      synchronized (found) {
+        result.success(new ArrayList<>(found));
+      }
+    }, 4000);
+  }
+
+  // Return bonded devices formatted as BT:MAC:Name (filter to likely Epson names)
+  private List<String> getBondedBtPrinters() {
+    List<String> result = new ArrayList<>();
+    try {
+      BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+      if (adapter == null) return result;
+      Set<BluetoothDevice> bonded = adapter.getBondedDevices();
+      if (bonded == null) return result;
+      for (BluetoothDevice d : bonded) {
+        String name = d.getName();
+        String mac = d.getAddress();
+        if (mac == null || mac.isEmpty()) continue;
+        // Heuristic: Epson names often contain "TM" or "EPSON"
+        if (name == null || name.isEmpty() ||
+            !(name.toUpperCase().contains("TM") || name.toUpperCase().contains("EPSON"))) {
+          // Still include; user may rename device
+        }
+        String entry = "BT:" + mac + ":" + (name != null ? name : "Printer");
+        if (!result.contains(entry)) result.add(entry);
+      }
+    } catch (Throwable t) {
+      // ignore and return what we have
+    }
+    return result;
+  }
+
   private void connectPrinter(@NonNull MethodCall call, @NonNull Result result) {
     try {
       @SuppressWarnings("unchecked")
@@ -155,41 +249,51 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
       // Determine target
       String target = (String) args.get("targetString");
       if (target == null || target.isEmpty()) {
-        // Build from identifier + portType
         String identifier = (String) args.get("identifier");
         Number portTypeNum = (Number) args.get("portType");
         int portType = portTypeNum != null ? portTypeNum.intValue() : 1; // default tcp
         String prefix;
         switch (portType) {
           case 1: prefix = "TCP:"; break; // tcp
-          case 2: prefix = "BT:"; break;  // bluetooth
+          case 2: prefix = "BT:"; break;  // bluetooth classic
           case 3: prefix = "USB:"; break; // usb
-          case 4: prefix = "BLE:"; break; // ble
+          case 4: prefix = "BLE:"; break; // ble (not used here)
           default: prefix = "TCP:"; break;
         }
-        target = (identifier != null && identifier.startsWith("TCP:")) ? identifier : (prefix + identifier);
+        target = (identifier != null && (identifier.startsWith("TCP:") || identifier.startsWith("BT:") || identifier.startsWith("BLE:") || identifier.startsWith("USB:")))
+            ? identifier
+            : (prefix + identifier);
       }
 
-      // Only implement TCP for now
-      if (!target.startsWith("TCP:")) {
-        result.error("UNSUPPORTED", "Only TCP connection is implemented on Android right now", null);
+      // Support TCP and Bluetooth (Classic)
+      if (!(target.startsWith("TCP:") || target.startsWith("BT:"))) {
+        result.error("UNSUPPORTED", "Only TCP/BT connection is supported on Android right now", null);
         return;
       }
+
+      // Timeout from args (ms), default 15000
+      int timeout = 15000;
+      Object tObj = args.get("timeout");
+      if (tObj instanceof Number) {
+        timeout = ((Number) tObj).intValue();
+      } else if (tObj != null) {
+        try { timeout = Integer.parseInt(String.valueOf(tObj)); } catch (Exception ignored) {}
+      }
+      if (timeout <= 0) timeout = 15000;
 
       // Disconnect any existing connection
       safeDisposePrinter();
 
       // Map series/lang (fallback to TM_M30III + ANK if not provided)
-      int seriesIdx = getInt(args.get("printerSeries"), 29); // tmM30III index in enum
-      int langIdx = getInt(args.get("modelLang"), 0); // ank
+      int seriesIdx = getInt(args.get("printerSeries"), 29);
+      int langIdx = getInt(args.get("modelLang"), 0);
       int seriesConst = mapSeries(seriesIdx);
       int langConst = mapLang(langIdx);
 
       mPrinter = new Printer(seriesConst, langConst, context);
-      // Optional: mPrinter.setReceiveEventListener((printerObj, code, status, printJobId) -> {});
 
-      // Connect (PARAM_DEFAULT == 0)
-      mPrinter.connect(target, Printer.PARAM_DEFAULT);
+      // Connect with explicit timeout
+      mPrinter.connect(target, timeout);
 
       result.success(null);
     } catch (Epos2Exception e) {
@@ -204,15 +308,9 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
   private void disconnectPrinter(@NonNull Result result) {
     try {
       if (mPrinter != null) {
-        try {
-          mPrinter.disconnect();
-        } catch (Exception ignored) {}
-        try {
-          mPrinter.clearCommandBuffer();
-        } catch (Exception ignored) {}
-        try {
-          mPrinter.setReceiveEventListener(null);
-        } catch (Exception ignored) {}
+        try { mPrinter.disconnect(); } catch (Exception ignored) {}
+        try { mPrinter.clearCommandBuffer(); } catch (Exception ignored) {}
+        try { mPrinter.setReceiveEventListener(null); } catch (Exception ignored) {}
       }
       mPrinter = null;
       result.success(null);
@@ -294,6 +392,176 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         runOnMain(() -> result.error("PRINT_FAILED", ex.getMessage(), null));
       }
     }).start();
+  }
+
+  // Pairing helper: prefer active Epson discovery result; fallback to bonded
+  private void pairBluetoothDevice(@NonNull Result result) {
+    final List<String> found = new ArrayList<>();
+
+    final FilterOption filter = new FilterOption();
+    filter.setDeviceType(Discovery.TYPE_PRINTER);
+    filter.setPortType(Discovery.PORTTYPE_BLUETOOTH);
+    filter.setEpsonFilter(Discovery.FILTER_NAME);
+
+    final DiscoveryListener listener = new DiscoveryListener() {
+      @Override
+      public void onDiscovery(DeviceInfo deviceInfo) {
+        String target = deviceInfo.getTarget();
+        String name = deviceInfo.getDeviceName();
+        String btAddr = deviceInfo.getBdAddress();
+        String prefixTarget = null;
+        if (target != null && target.startsWith("BT:")) {
+          prefixTarget = target;
+        } else if (btAddr != null && !btAddr.isEmpty()) {
+          prefixTarget = "BT:" + btAddr;
+        }
+        if (prefixTarget == null) return;
+        String entry = prefixTarget + ":" + (name != null ? name : "Printer");
+        synchronized (found) {
+          if (!found.contains(entry)) found.add(entry);
+        }
+      }
+    };
+
+    boolean started = false;
+    try {
+      Discovery.start(context, filter, listener);
+      started = true;
+    } catch (Exception e) {
+      // ignore, will fallback
+    }
+
+    final boolean startedFinal = started;
+    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+      if (startedFinal) {
+        while (true) {
+          try {
+            Discovery.stop();
+            break;
+          } catch (Epos2Exception e) {
+            if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+              break;
+            }
+          }
+        }
+      }
+
+      String cleaned = null;
+      synchronized (found) {
+        if (!found.isEmpty()) {
+          String entry = found.get(0); // e.g., BT:AA:BB:CC:DD:EE:FF:TM-m30III
+          int last = entry.lastIndexOf(":");
+          if (last > 0) cleaned = entry.substring(0, last); // BT:AA:BB:CC:DD:EE:FF
+        }
+      }
+
+      if (cleaned == null) {
+        // Fallback to bonded list
+        List<String> bonded = getBondedBtPrinters();
+        if (!bonded.isEmpty()) {
+          String entry = bonded.get(0); // e.g., BT:AA:BB:CC:DD:EE:FF:Name
+          int last = entry.lastIndexOf(":");
+          if (last > 0) cleaned = entry.substring(0, last); // BT:AA:BB:CC:DD:EE:FF
+        }
+      }
+
+      Map<String, Object> payload = new HashMap<>();
+      payload.put("target", cleaned);
+      payload.put("resultCode", cleaned != null ? 0 : -1);
+      result.success(payload);
+    }, 3500);
+  }
+
+  private void openCashDrawer(@NonNull Result result) {
+    if (mPrinter == null) {
+      result.error("NOT_CONNECTED", "Printer is not connected", null);
+      return;
+    }
+
+    new Thread(() -> {
+      Epos2Exception lastEpson = null;
+      Exception lastEx = null;
+      try {
+        synchronized (EpsonPrinterAndroidPlugin.this) {
+          // Try defined combinations: 2-pin/5-pin with 100ms then 200ms using SDK constants
+          int[] drawers = new int[] { Printer.DRAWER_2PIN, Printer.DRAWER_5PIN };
+          int[] pulses = new int[] { Printer.PULSE_100, Printer.PULSE_200 };
+          boolean success = false;
+
+          // First try Epson SDK addPulse
+          for (int d : drawers) {
+            for (int p : pulses) {
+              try {
+                mPrinter.clearCommandBuffer();
+                mPrinter.addPulse(d, p);
+                mPrinter.sendData(Printer.PARAM_DEFAULT);
+                success = true;
+                break;
+              } catch (Epos2Exception ee) {
+                lastEpson = ee;
+              } catch (Exception ex) {
+                lastEx = ex;
+              }
+            }
+            if (success) break;
+          }
+
+          // Fallback: raw ESC/POS command (ESC p m t1 t2) if addPulse failed (some SDK builds validate and reject)
+          if (!success) {
+            // m: 0(pin2),1(pin5); t1/t2 are 2ms units
+            int[] mVals = new int[] { 0, 1 };
+            int[][] timings = new int[][] { {50, 50}, {100, 100} }; // 100ms/200ms
+            for (int m : mVals) {
+              for (int[] tt : timings) {
+                try {
+                  byte[] cmd = new byte[] { 0x1B, 0x70, (byte)m, (byte)tt[0], (byte)tt[1] };
+                  mPrinter.clearCommandBuffer();
+                  mPrinter.addCommand(cmd);
+                  mPrinter.sendData(Printer.PARAM_DEFAULT);
+                  success = true;
+                  break;
+                } catch (Epos2Exception ee) {
+                  lastEpson = ee;
+                } catch (Exception ex) {
+                  lastEx = ex;
+                }
+              }
+              if (success) break;
+            }
+          }
+
+          if (!success) {
+            if (lastEpson != null) throw lastEpson;
+            if (lastEx != null) throw lastEx;
+            throw new RuntimeException("Unknown drawer failure");
+          }
+        }
+        runOnMain(() -> result.success(null));
+      } catch (Epos2Exception e) {
+        int code = e.getErrorStatus();
+        String friendly = mapEposError(code);
+        runOnMain(() -> result.error("DRAWER_FAILED", "Epson SDK error (" + friendly + "): " + e.getMessage(), code));
+      } catch (Exception ex) {
+        runOnMain(() -> result.error("DRAWER_FAILED", ex.getMessage(), null));
+      }
+    }).start();
+  }
+
+  private String mapEposError(int code) {
+    switch (code) {
+      case 1: return "ERR_PARAM";
+      case 2: return "ERR_ILLEGAL";
+      case 3: return "ERR_MEMORY";
+      case 4: return "ERR_PROCESSING";
+      case 5: return "ERR_NOT_FOUND";
+      case 6: return "ERR_SYSTEM";
+      case 7: return "ERR_CONNECT";
+      case 8: return "ERR_TIMEOUT";
+      case 9: return "ERR_IN_USE";
+      case 10: return "ERR_TYPE_INVALID";
+      case 11: return "ERR_DISCONNECT";
+      default: return "ERR_" + code;
+    }
   }
 
   private void safeDisposePrinter() {

@@ -475,7 +475,9 @@ class _MyHomePageState extends State<MyHomePage> {
                         ElevatedButton(onPressed: _discoverPrinters, child: const Text('Discover LAN')),
                         ElevatedButton(onPressed: _discoverBluetoothPrinters, child: const Text('Discover Bluetooth')),
                         ElevatedButton(onPressed: _discoverUsbPrinters, child: const Text('Discover USB')),
-                        ElevatedButton(onPressed: _pairBluetooth, child: const Text('Pair Bluetooth')),
+                        // Hide Pair button on Android
+                        if (!Platform.isAndroid)
+                          ElevatedButton(onPressed: _pairBluetooth, child: const Text('Pair Bluetooth')),
                         ElevatedButton(onPressed: _selectedPrinter != null && !_isConnected ? _connectToPrinter : null, child: const Text('Connect')),
                         ElevatedButton(onPressed: _isConnected ? _disconnectFromPrinter : null, child: const Text('Disconnect')),
                         ElevatedButton(onPressed: _isConnected ? _printReceipt : null, child: const Text('Print Test Receipt')),

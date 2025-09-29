@@ -9,10 +9,10 @@ Flutter wrapper for Epson iOS SDK.
 
 Tested:
 
-| Device      | TM-m30III |
+| Device      | TM-m30III | Cash Drawer |
 |-------------|--------|
-| iOS         |   LAN, Bluetooth, usb     | 
-| Android     |       |
+| iOS         |   LAN, Bluetooth (pre-connected, in-app pairing), usb     | yes |
+| Android     |  LAN, Bluetooth (pre-connected)   | yes |
 
 
 ## TODO
