@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:epson_printer/epson_printer.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:image_picker/image_picker.dart';
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 void main() {
@@ -450,6 +452,14 @@ class _MyHomePageState extends State<MyHomePage> {
     String title = _headerControllerPos.text.trim().isNotEmpty ? _headerControllerPos.text.trim() : _headerTitle.trim();
     if (title.isNotEmpty) {
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(title) + '\n' }));
+      // Insert logo (centered) after header title if available
+      if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
+        // For now we just print a [LOGO] marker; replace when image command type is supported.
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center('[LOGO]') + '\n' }));
+        if (_imageSpacingLines > 0) {
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _imageSpacingLines }));
+        }
+      }
       if (_headerSpacingLines > 0) {
         cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _headerSpacingLines }));
       }
@@ -504,6 +514,22 @@ class _MyHomePageState extends State<MyHomePage> {
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}));
     return cmds;
+  }
+
+  Future<void> _pickLogoImage() async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(source: ImageSource.gallery, maxWidth: _imageWidthPx.toDouble());
+    if (image == null) return;
+    try {
+      final bytes = await image.readAsBytes();
+      final b64 = base64Encode(bytes);
+      setState(() {
+        _logoBase64 = b64;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Logo pick failed: $e')));
+    }
   }
 
   Future<void> _disconnectFromPrinter() async {
@@ -671,6 +697,34 @@ class _MyHomePageState extends State<MyHomePage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text('Receipt Layout', style: Theme.of(context).textTheme.headlineSmall),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        ElevatedButton(
+                          onPressed: _pickLogoImage,
+                          child: const Text('Pick Logo'),
+                        ),
+                        const SizedBox(width: 8),
+                        if (_logoBase64 != null && _logoBase64!.isNotEmpty)
+                          ElevatedButton(
+                            onPressed: () => setState(() => _logoBase64 = null),
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                            child: const Text('Clear Logo'),
+                          ),
+                      ],
+                    ),
+                    if (_logoBase64 != null && _logoBase64!.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        height: 80,
+                        child: Image.memory(
+                          // decode preview (safe minimal) - if large, consider resizing
+                          // ignore: unnecessary_raw_strings
+                          const Base64Decoder().convert(_logoBase64!),
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     TextField(
                       controller: _headerController,

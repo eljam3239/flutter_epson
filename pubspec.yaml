@@ -38,6 +38,9 @@ dependencies:
   # Permission handling
   permission_handler: ^11.3.1
 
+  # Image picking for POS logo
+  image_picker: ^1.1.2
+
   # Epson printer plugin
   epson_printer:
     path: packages/epson_printer

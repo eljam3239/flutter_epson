@@ -65,5 +65,7 @@
 		<string>com.epson.posprinter</string>
 		<string>com.epson.escpos</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Logo selection for printing on receipts.</string>
 </dict>
 </plist>
