@@ -37,11 +37,73 @@ class _MyHomePageState extends State<MyHomePage> {
   String _printerStatus = 'Unknown';
   String? _selectedPrinter;
   bool _openDrawerAfterPrint = true;
+  
+  // ================= Receipt Layout State (Structured Formatting) =================
+  // Controllers for dynamic receipt fields. These will allow the user to build
+  // argument-driven receipts similar to the Star printer sample.
+  final TextEditingController _headerController = TextEditingController();
+  final TextEditingController _detailsController = TextEditingController(); // Multiline: key: value or free-form lines
+  final TextEditingController _itemsController = TextEditingController();   // Multiline: item lines (e.g. "2x Coffee @ 3.50")
+  final TextEditingController _footerController = TextEditingController();
+  final TextEditingController _logoBase64Controller = TextEditingController(); // Optional Base64 image data
+
+  // Spacing / formatting knobs (can be adjusted via sliders in upcoming UI card)
+  double _headerGap = 1;     // feed lines after header block
+  double _lineSpacing = 0;   // extra feeds between detail lines
+  double _itemSpacing = 0;   // extra feeds between item lines
+
+  // Future: cache of parsed items / prebuilt commands if optimization needed.
+  // For now we rebuild on each print.
+  // ===============================================================================
+
+  // ================= POS Style Receipt Fields (Specific Layout) ==================
+  String _headerTitle = "Wendy's";
+  int _headerFontSize = 32; // placeholder (SDK may later support styles)
+  int _headerSpacingLines = 1;
+  String? _logoBase64; // optional centered image
+  int _imageWidthPx = 200; // placeholder for future image scaling
+  int _imageSpacingLines = 1;
+  late final TextEditingController _headerControllerPos; // direct edit of title if needed
+
+  // Detail fields
+  String _locationText = '67 LeBron James avenue, Cleveland, OH';
+  String _date = '02/10/2025';
+  String _time = '2:39 PM';
+  String _cashier = 'Eli';
+  String _receiptNum = '67676969';
+  String _lane = '1';
+  String _footer = 'Thank you for shopping with us! Have a nice day!';
+
+  // Single item template (will repeat itemRepeat times)
+  String _itemQuantity = '1';
+  String _itemName = 'Orange';
+  String _itemPrice = '5.00';
+  String _itemRepeat = '3';
+  // ===============================================================================
 
   @override
   void initState() {
     super.initState();
     // Defer Bluetooth permission requests to Bluetooth actions.
+    // Seed some default demo content for structured receipt fields.
+    _headerController.text = 'My Shop\\n123 Sample Street';
+    _detailsController.text = 'Order: 12345\\nDate: 2025-01-01 12:34';
+    _itemsController.text = '2x Coffee @3.50\\n1x Bagel @2.25';
+    _footerController.text = 'Thank you for visiting!';
+
+    // POS style controller
+    _headerControllerPos = TextEditingController(text: _headerTitle);
+  }
+
+  @override
+  void dispose() {
+    _headerController.dispose();
+    _detailsController.dispose();
+    _itemsController.dispose();
+    _footerController.dispose();
+    _logoBase64Controller.dispose();
+    _headerControllerPos.dispose();
+    super.dispose();
   }
 
   Future<void> _checkAndRequestPermissions() async {
@@ -205,23 +267,39 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     try {
-      final printJob = EpsonPrintJob(
-        commands: [
-          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'EPSON PRINTER TEST\n'}),
-          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': '================\n'}),
-          EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
-          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Counter: $_counter\n'}),
-          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': ''' 
- |\__/,|   (`\
- |_ _  |.--.) )
- ( T   )     /
-(((^_(((/(((_/\n '''}),
-          EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 2}),
-          EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Thank you!\n'}),
-          EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
-          EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}),
-        ],
-      );
+      // Attempt to build structured commands from layout inputs.
+      final structured = _buildReceiptCommandsFromLayout();
+
+      // If all fields empty, we fall back automatically. Otherwise, ensure structured has content.
+      final anyFieldNotEmpty = _headerController.text.trim().isNotEmpty ||
+          _detailsController.text.trim().isNotEmpty ||
+          _itemsController.text.trim().isNotEmpty ||
+          _footerController.text.trim().isNotEmpty ||
+          _logoBase64Controller.text.trim().isNotEmpty;
+      if (anyFieldNotEmpty && structured.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nothing to print: please add header, details, items, footer or logo data.')),
+        );
+        return;
+      }
+
+      final commands = structured.isNotEmpty
+          ? structured
+          : [
+              // Fallback legacy demo content if no structured input provided.
+              EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'EPSON PRINTER TEST\n'}),
+              EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': '================\n'}),
+              EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
+              EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Counter: $_counter\n'}),
+              EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Legacy Demo Mode\n'}),
+              EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 2}),
+              EpsonPrintCommand(type: EpsonCommandType.text, parameters: {'data': 'Thank you!\n'}),
+              EpsonPrintCommand(type: EpsonCommandType.feed, parameters: {'line': 1}),
+              EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}),
+            ];
+
+      final printJob = EpsonPrintJob(commands: commands);
 
       await EpsonPrinter.printReceipt(printJob);
 
@@ -241,6 +319,192 @@ class _MyHomePageState extends State<MyHomePage> {
         SnackBar(content: Text('Print failed: $e')),
       );
     }
+  }
+
+  // Build EpsonPrintCommand list from current layout controller contents.
+  // This is intentionally conservative: relies only on 'text', 'feed', 'cut' for broad compatibility.
+  List<EpsonPrintCommand> _buildReceiptCommandsFromLayout() {
+    final List<EpsonPrintCommand> cmds = [];
+
+    String header = _headerController.text.trim();
+    String details = _detailsController.text.trim();
+    String items = _itemsController.text.trim();
+    String footer = _footerController.text.trim();
+    String logoB64 = _logoBase64Controller.text.trim();
+
+    bool hasAny = header.isNotEmpty || details.isNotEmpty || items.isNotEmpty || footer.isNotEmpty || logoB64.isNotEmpty;
+    if (!hasAny) {
+      return [];
+    }
+
+    void addTextBlock(String block) {
+      if (block.isEmpty) return;
+      // Ensure newline termination for printer line flush.
+      if (!block.endsWith('\n')) block = '$block\n';
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': block }));
+    }
+
+    // Header block (may contain internal newlines)
+    if (header.isNotEmpty) {
+      addTextBlock(header);
+      if (_headerGap > 0) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _headerGap.round() }));
+      }
+    }
+
+    // Placeholder for logo image if provided (SDK may later support image command type)
+    if (logoB64.isNotEmpty) {
+      // For now just add a marker line so user knows image would print here.
+      addTextBlock('[LOGO]\n');
+    }
+
+    // Details: treat each non-empty line individually, applying optional spacing
+    if (details.isNotEmpty) {
+      final lines = details.split(RegExp(r'\r?\n')).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+      for (int i = 0; i < lines.length; i++) {
+        addTextBlock(lines[i]);
+        if (_lineSpacing > 0 && i != lines.length - 1) {
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _lineSpacing.round() }));
+        }
+      }
+      // Gap after details block (reuse lineSpacing semantics if desired)
+      if (_lineSpacing > 0) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
+      }
+    }
+
+    // Items: raw lines for now (future parsing for qty/price alignment)
+    if (items.isNotEmpty) {
+      final itemLines = items.split(RegExp(r'\r?\n')).map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+      for (int i = 0; i < itemLines.length; i++) {
+        addTextBlock(itemLines[i]);
+        if (_itemSpacing > 0 && i != itemLines.length - 1) {
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _itemSpacing.round() }));
+        }
+      }
+      // Add a separating feed after items
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
+    }
+
+    // Footer
+    if (footer.isNotEmpty) {
+      addTextBlock(footer);
+    }
+
+    // Final feeds + cut
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}));
+
+    return cmds;
+  }
+
+  // ===================== POS Receipt Formatting Helpers =====================
+  static const int _paperCharsPerLine = 42; // typical 80mm (can adjust if needed)
+
+  String _center(String text) {
+    text = text.trim();
+    if (text.isEmpty) return '';
+    if (text.length >= _paperCharsPerLine) return text;
+    final totalPad = _paperCharsPerLine - text.length;
+    final left = (totalPad / 2).floor();
+    final right = totalPad - left;
+    return ' ' * left + text + ' ' * right;
+  }
+
+  String _horizontalLine() => '-' * _paperCharsPerLine;
+
+  String _leftRight(String left, String right) {
+    left = left.trim();
+    right = right.trim();
+    final space = _paperCharsPerLine - left.length - right.length;
+    if (space < 1) {
+      // truncate left if overflow
+      final maxLeft = _paperCharsPerLine - right.length - 1;
+      if (maxLeft < 1) return (left + right).substring(0, _paperCharsPerLine);
+      left = left.substring(0, maxLeft);
+      return '$left ${right}';
+    }
+    return left + ' ' * space + right;
+  }
+
+  String _qtyNamePrice(String qty, String name, String price) {
+    // Layout: qty (3) name (left) price (right) within paper width.
+    qty = qty.trim();
+    name = name.trim();
+    price = price.trim();
+    const qtyWidth = 4; // e.g. '999x'
+    const priceWidth = 8; // enough for large price
+    final qtyStr = qty.length > 3 ? qty.substring(0, 3) : qty;
+    final qtyField = qtyStr.padRight(qtyWidth);
+    // Remaining width for name = total - qtyWidth - priceWidth
+    final nameWidth = _paperCharsPerLine - qtyWidth - priceWidth;
+    String nameTrunc = name;
+    if (nameTrunc.length > nameWidth) nameTrunc = nameTrunc.substring(0, nameWidth);
+    final priceField = price.padLeft(priceWidth);
+    return qtyField + nameTrunc.padRight(nameWidth) + priceField;
+  }
+  // ==========================================================================
+
+  List<EpsonPrintCommand> _buildPosReceiptCommands() {
+    final List<EpsonPrintCommand> cmds = [];
+
+    String title = _headerControllerPos.text.trim().isNotEmpty ? _headerControllerPos.text.trim() : _headerTitle.trim();
+    if (title.isNotEmpty) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(title) + '\n' }));
+      if (_headerSpacingLines > 0) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _headerSpacingLines }));
+      }
+    }
+
+    // Future style/image usage placeholder (avoid unused field warnings until implemented)
+    // ignore: unused_local_variable
+    final _stylePlaceholder = {
+      'fontSize': _headerFontSize,
+      'logoProvided': _logoBase64 != null,
+      'imageWidth': _imageWidthPx,
+      'imageSpacing': _imageSpacingLines,
+    };
+
+    if (_locationText.trim().isNotEmpty) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _locationText.trim() + '\n' }));
+    }
+
+    // Centered 'Receipt'
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' + _center('Receipt') + '\n' }));
+
+    // Date Time (left) vs Cashier (right)
+    final dateTime = '${_date.trim()} ${_time.trim()}';
+    final cashierStr = 'Cashier: ${_cashier.trim()}';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _leftRight(dateTime, cashierStr) + '\n' }));
+
+    // Receipt # vs Lane
+    final recLine = 'Receipt: ${_receiptNum.trim()}';
+    final laneLine = 'Lane: ${_lane.trim()}';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _leftRight(recLine, laneLine) + '\n' }));
+
+    // Blank line
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
+
+    // Horizontal line
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _horizontalLine() + '\n' }));
+
+    // Items repeated
+    final repeatCount = int.tryParse(_itemRepeat) ?? 1;
+    for (int i = 0; i < repeatCount; i++) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _qtyNamePrice(_itemQuantity, _itemName, _itemPrice) + '\n' }));
+    }
+
+    // Second horizontal line
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _horizontalLine() + '\n' }));
+
+    if (_footer.trim().isNotEmpty) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _footer.trim() + '\n' }));
+    }
+
+    // End feeds + cut
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}));
+    return cmds;
   }
 
   Future<void> _disconnectFromPrinter() async {
@@ -400,6 +664,111 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
             ),
             const SizedBox(height: 16),
+            // ================= Receipt Layout Editor Card =================
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Receipt Layout', style: Theme.of(context).textTheme.headlineSmall),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _headerController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Header (multi-line allowed)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _detailsController,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        labelText: 'Details (each line printed separately)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _itemsController,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Items (one line per item)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _footerController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Footer',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    ExpansionTile(
+                      title: const Text('Advanced / Logo & Spacing'),
+                      children: [
+                        TextField(
+                          controller: _logoBase64Controller,
+                          maxLines: 3,
+                          decoration: const InputDecoration(
+                            labelText: 'Logo (Base64) - placeholder only right now',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        _SliderRow(
+                          label: 'Header Gap',
+                          value: _headerGap,
+                          min: 0,
+                          max: 5,
+                          divisions: 5,
+                          onChanged: (v) => setState(() => _headerGap = v),
+                        ),
+                        _SliderRow(
+                          label: 'Detail Line Spacing',
+                          value: _lineSpacing,
+                          min: 0,
+                          max: 3,
+                          divisions: 3,
+                          onChanged: (v) => setState(() => _lineSpacing = v),
+                        ),
+                        _SliderRow(
+                          label: 'Item Spacing',
+                          value: _itemSpacing,
+                          min: 0,
+                          max: 3,
+                          divisions: 3,
+                          onChanged: (v) => setState(() => _itemSpacing = v),
+                        ),
+                        const SizedBox(height: 8),
+                        Builder(
+                          builder: (context) {
+                            final detailLines = _detailsController.text.trim().isEmpty
+                                ? 0
+                                : _detailsController.text.trim().split(RegExp('\\r?\\n')).where((l) => l.trim().isNotEmpty).length;
+                            final itemLines = _itemsController.text.trim().isEmpty
+                                ? 0
+                                : _itemsController.text.trim().split(RegExp('\\r?\\n')).where((l) => l.trim().isNotEmpty).length;
+                            return Text('Preview: header=${_headerController.text.trim().isEmpty ? 0 : 1}, details=$detailLines, items=$itemLines, footer=${_footerController.text.trim().isEmpty ? 0 : 1}');
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        ElevatedButton(
+                          onPressed: _isConnected ? _printReceipt : null,
+                          child: const Text('Print Structured Receipt'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -481,10 +850,127 @@ class _MyHomePageState extends State<MyHomePage> {
                         ElevatedButton(onPressed: _selectedPrinter != null && !_isConnected ? _connectToPrinter : null, child: const Text('Connect')),
                         ElevatedButton(onPressed: _isConnected ? _disconnectFromPrinter : null, child: const Text('Disconnect')),
                         ElevatedButton(onPressed: _isConnected ? _printReceipt : null, child: const Text('Print Test Receipt')),
+                        ElevatedButton(
+                          onPressed: _isConnected
+                              ? () async {
+                                  final cmds = _buildPosReceiptCommands();
+                                  if (cmds.isEmpty) {
+                                    if (!mounted) return; 
+                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('POS receipt has no content.')));
+                                    return;
+                                  }
+                                  try {
+                                    await EpsonPrinter.printReceipt(EpsonPrintJob(commands: cmds));
+                                    if (_openDrawerAfterPrint) {
+                                      try { await EpsonPrinter.openCashDrawer(); } catch (_) {}
+                                    }
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('POS Receipt sent')));
+                                  } catch (e) {
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('POS print failed: $e')));
+                                  }
+                                }
+                              : null,
+                          child: const Text('Print POS Receipt'),
+                        ),
                         ElevatedButton(onPressed: _getStatus, child: const Text('Get Status')),
                         ElevatedButton(onPressed: _isConnected ? _openCashDrawer : null, child: const Text('Open Cash Drawer')),
                       ],
                     ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // POS Receipt Field Quick Adjust Card
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('POS Receipt Fields', style: Theme.of(context).textTheme.headlineSmall),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _headerControllerPos,
+                      decoration: const InputDecoration(labelText: 'Header Title', border: OutlineInputBorder()),
+                      onChanged: (v) => setState(() => _headerTitle = v),
+                    ),
+                    const SizedBox(height: 12),
+                    _TwoCol(
+                      left: TextField(
+                        decoration: const InputDecoration(labelText: 'Date', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _date),
+                        onSubmitted: (v) => setState(() => _date = v),
+                      ),
+                      right: TextField(
+                        decoration: const InputDecoration(labelText: 'Time', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _time),
+                        onSubmitted: (v) => setState(() => _time = v),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _TwoCol(
+                      left: TextField(
+                        decoration: const InputDecoration(labelText: 'Cashier', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _cashier),
+                        onSubmitted: (v) => setState(() => _cashier = v),
+                      ),
+                      right: TextField(
+                        decoration: const InputDecoration(labelText: 'Receipt #', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _receiptNum),
+                        onSubmitted: (v) => setState(() => _receiptNum = v),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _TwoCol(
+                      left: TextField(
+                        decoration: const InputDecoration(labelText: 'Lane', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _lane),
+                        onSubmitted: (v) => setState(() => _lane = v),
+                      ),
+                      right: TextField(
+                        decoration: const InputDecoration(labelText: 'Location', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _locationText),
+                        onSubmitted: (v) => setState(() => _locationText = v),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _TwoCol(
+                      left: TextField(
+                        decoration: const InputDecoration(labelText: 'Item Qty', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _itemQuantity),
+                        onSubmitted: (v) => setState(() => _itemQuantity = v),
+                      ),
+                      right: TextField(
+                        decoration: const InputDecoration(labelText: 'Item Name', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _itemName),
+                        onSubmitted: (v) => setState(() => _itemName = v),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _TwoCol(
+                      left: TextField(
+                        decoration: const InputDecoration(labelText: 'Item Price', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _itemPrice),
+                        onSubmitted: (v) => setState(() => _itemPrice = v),
+                      ),
+                      right: TextField(
+                        decoration: const InputDecoration(labelText: 'Repeat Count', border: OutlineInputBorder()),
+                        controller: TextEditingController(text: _itemRepeat),
+                        onSubmitted: (v) => setState(() => _itemRepeat = v),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      decoration: const InputDecoration(labelText: 'Footer', border: OutlineInputBorder()),
+                      controller: TextEditingController(text: _footer),
+                      onSubmitted: (v) => setState(() => _footer = v),
+                      maxLines: 2,
+                    ),
+                    const SizedBox(height: 12),
+                    Text('Preview lines: POS receipt auto-formatted'),
                   ],
                 ),
               ),
@@ -498,6 +984,69 @@ class _MyHomePageState extends State<MyHomePage> {
         tooltip: 'Increment',
         child: const Icon(Icons.add),
       ),
+    );
+  }
+}
+
+// Small helper widget for labeled slider rows inside the receipt layout card.
+class _SliderRow extends StatelessWidget {
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final int? divisions;
+  final ValueChanged<double> onChanged;
+
+  const _SliderRow({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+    this.divisions,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          flex: 2,
+          child: Text(label, style: const TextStyle(fontSize: 12)),
+        ),
+        Expanded(
+          flex: 5,
+          child: Slider(
+            value: value,
+            min: min,
+            max: max,
+            divisions: divisions,
+            label: value.toStringAsFixed(0),
+            onChanged: onChanged,
+          ),
+        ),
+        SizedBox(
+          width: 32,
+          child: Text(value.toStringAsFixed(0), textAlign: TextAlign.center),
+        ),
+      ],
+    );
+  }
+}
+
+class _TwoCol extends StatelessWidget {
+  final Widget left;
+  final Widget right;
+  const _TwoCol({required this.left, required this.right});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(child: left),
+        const SizedBox(width: 12),
+        Expanded(child: right),
+      ],
     );
   }
 }
