@@ -31,6 +31,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 
 /** EpsonPrinterAndroidPlugin */
 public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandler, ActivityAware {
@@ -396,6 +398,71 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
                 }
                 break;
               }
+              case "image": {
+                // Parameters: imagePath plus optional width & flags
+                String imagePath = (String) params.get("imagePath");
+                boolean debug = false; // debug markers suppressed unless explicitly enabled in params
+                try { Object dbg = params.get("debug"); if (dbg != null) debug = Boolean.parseBoolean(String.valueOf(dbg)); } catch (Exception ignored) {}
+                boolean advancedProcessing = false;
+                try { Object ap = params.get("advancedProcessing"); if (ap != null) advancedProcessing = Boolean.parseBoolean(String.valueOf(ap)); } catch (Exception ignored) {}
+                String align = null; try { Object al = params.get("align"); if (al != null) align = String.valueOf(al); } catch (Exception ignored) {}
+                if (imagePath != null && !imagePath.isEmpty()) {
+                  Bitmap bmp = BitmapFactory.decodeFile(imagePath);
+                  if (bmp != null) {
+                    int origW = bmp.getWidth();
+                    int origH = bmp.getHeight();
+                    int targetW = getInt(params.get("targetWidth"), origW);
+                    int printerWidth = getInt(params.get("printerWidth"), 0);
+                    if (targetW > 0 && targetW < origW) {
+                      try {
+                        float ratio = (float) targetW / (float) origW;
+                        bmp = Bitmap.createScaledBitmap(bmp, targetW, Math.max(1,(int)(origH*ratio)), true);
+                      } catch (Throwable ignored) {}
+                    }
+                    int width = bmp.getWidth();
+                    int height = bmp.getHeight();
+                    boolean centerRequest = align != null && align.equalsIgnoreCase("center");
+                    if (debug) { try { mPrinter.addText("[IMG_START w="+width+" h="+height+"]\n"); } catch (Exception ignored) {} }
+                    if (centerRequest) { try { mPrinter.addTextAlign(Printer.ALIGN_CENTER); } catch (Exception ignored) {} }
+                    int color = Printer.PARAM_DEFAULT;
+                    int mode = Printer.MODE_MONO;
+                    int halftone = Printer.HALFTONE_DITHER;
+                    double brightness = 1.0;
+                    int compress = Printer.COMPRESS_AUTO;
+                    // Advanced processing: optional threshold + histogram (lightweight)
+                    if (advancedProcessing) {
+                      int bwThreshold = -1; try { Object th = params.get("bwThreshold"); if (th != null) bwThreshold = Integer.parseInt(String.valueOf(th)); } catch (Exception ignored) {}
+                      if (bwThreshold >= 0 && bwThreshold <= 255) {
+                        try {
+                          Bitmap mutable = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                          int[] pixels = new int[width*height]; bmp.getPixels(pixels,0,width,0,0,width,height);
+                          int blacks=0; for(int i=0;i<pixels.length;i++){int c=pixels[i];int r=(c>>16)&0xFF,g=(c>>8)&0xFF,b=c&0xFF;int lum=(r*30+g*59+b*11)/100;boolean isB=lum<bwThreshold; if(isB) blacks++; pixels[i]= isB?0xFF000000:0xFFFFFFFF;}
+                          double ratio = (double)blacks/(double)pixels.length; boolean collapsed = ratio>0.98||ratio<0.02; if(!collapsed){mutable.setPixels(pixels,0,width,0,0,width,height); bmp=mutable; if(debug){try{mPrinter.addText("[IMG_THRESH "+String.format("%.2f",ratio)+"]\n");}catch(Exception ignored){}}}
+                        } catch (Throwable ignored) {}
+                      }
+                    }
+                    try {
+                      mPrinter.addImage(bmp, 0, 0, width, height, color, mode, halftone, brightness, compress);
+                    } catch (Epos2Exception eImg) {
+                      if (advancedProcessing) {
+                        // Fallback: scale to 384 then retry once
+                        try {
+                          int fallbackW = Math.min(384,width);
+                          if (fallbackW < width) {
+                            float r = (float)fallbackW/width; Bitmap scaled = Bitmap.createScaledBitmap(bmp, fallbackW, Math.max(1,(int)(height*r)), true);
+                            mPrinter.addImage(scaled,0,0,scaled.getWidth(), scaled.getHeight(), color, mode, halftone, brightness, compress);
+                          }
+                        } catch (Exception ignored) {}
+                      }
+                    }
+                    if (centerRequest) { try { mPrinter.addTextAlign(Printer.ALIGN_LEFT); } catch (Exception ignored) {} }
+                    if (debug) { try { mPrinter.addText("[IMG_END w="+width+" h="+height+"]\n"); } catch (Exception ignored) {} }
+                  } else if (debug) {
+                    try { mPrinter.addText("[IMG_DECODE_FAILED]\n"); } catch (Exception ignored) {}
+                  }
+                }
+                break;
+              }
               case "feed": {
                 int line = getInt(params.get("line"), getInt(params.get("lines"), 1));
                 if (line < 1) line = 1;
@@ -694,26 +761,26 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
   public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
     channel.setMethodCallHandler(null);
     channel = null;
-    context = null;
   }
 
+  // ActivityAware implementations
   @Override
   public void onAttachedToActivity(ActivityPluginBinding binding) {
-    activity = binding.getActivity();
+    this.activity = binding.getActivity();
   }
 
   @Override
   public void onDetachedFromActivityForConfigChanges() {
-    activity = null;
+    this.activity = null;
   }
 
   @Override
   public void onReattachedToActivityForConfigChanges(ActivityPluginBinding binding) {
-    activity = binding.getActivity();
+    this.activity = binding.getActivity();
   }
 
   @Override
   public void onDetachedFromActivity() {
-    activity = null;
+    this.activity = null;
   }
 }

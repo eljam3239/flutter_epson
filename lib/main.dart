@@ -3,6 +3,7 @@ import 'package:epson_printer/epson_printer.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:io' show Platform;
 
 void main() {
@@ -449,15 +450,41 @@ class _MyHomePageState extends State<MyHomePage> {
   List<EpsonPrintCommand> _buildPosReceiptCommands() {
     final List<EpsonPrintCommand> cmds = [];
 
+    int _estimatePrinterDots() {
+      // Rough heuristic mapping from characters-per-line to dot width.
+      if (_posCharsPerLine <= 32) return 384;   // 58mm common
+      if (_posCharsPerLine <= 42) return 512;   // 72mm or dense 58mm fonts
+      if (_posCharsPerLine <= 48) return 576;   // 80mm Font A
+      if (_posCharsPerLine <= 56) return 640;   // Some 3" models
+      if (_posCharsPerLine <= 64) return 832;   // 80mm Font B / high density
+      return 576; // fallback
+    }
+    final printerWidthDots = _estimatePrinterDots();
+
     String title = _headerControllerPos.text.trim().isNotEmpty ? _headerControllerPos.text.trim() : _headerTitle.trim();
     if (title.isNotEmpty) {
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(title) + '\n' }));
-      // Insert logo (centered) after header title if available
       if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
-        // For now we just print a [LOGO] marker; replace when image command type is supported.
-        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center('[LOGO]') + '\n' }));
-        if (_imageSpacingLines > 0) {
-          cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _imageSpacingLines }));
+        // Persist logo to temp file for native side
+        try {
+          final bytes = base64Decode(_logoBase64!);
+          // NOTE: Synchronous write acceptable for small logo; could be pre-written earlier.
+          final tmpDir = Directory.systemTemp;
+          final file = File('${tmpDir.path}/epson_logo_${DateTime.now().millisecondsSinceEpoch}.png');
+          file.writeAsBytesSync(bytes, flush: true);
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.image, parameters: {
+            'imagePath': file.path,
+            'printerWidth': printerWidthDots,
+            'targetWidth': _imageWidthPx, // allow native scaling
+            'align': 'center',
+            'advancedProcessing': false,
+          }));
+          if (_imageSpacingLines > 0) {
+            cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _imageSpacingLines }));
+          }
+        } catch (_) {
+          // Fallback marker if file write fails
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center('[LOGO ERR]') + '\n' }));
         }
       }
       if (_headerSpacingLines > 0) {
