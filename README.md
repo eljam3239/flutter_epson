@@ -1,6 +1,6 @@
 # test_epson
 
-Flutter wrapper for Epson iOS SDK.
+Flutter wrapper for Epson's iOS and Android SDKs.
 
 ## Setup
 
@@ -12,7 +12,7 @@ Tested:
 | Device      | TM-m30III | Cash Drawer |
 |-------------|--------|--------|
 | iOS         |   LAN, Bluetooth (pre-connected, in-app pairing), usb     | yes |
-| Android     |  LAN, Bluetooth (pre-connected)   | yes |
+| Android     |  LAN, Bluetooth (pre-connected), usb   | yes |
 
 Cannot connect to Bluetooth while printer is wired via USB -- even if the user Disconnects from the usb connection in-app
 
