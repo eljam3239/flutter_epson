@@ -79,6 +79,8 @@ class _MyHomePageState extends State<MyHomePage> {
   String _itemName = 'Orange';
   String _itemPrice = '5.00';
   String _itemRepeat = '3';
+  // Estimated characters-per-line for current printer font (adjustable by user)
+  int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm often 32 or 42
   // ===============================================================================
 
   @override
@@ -399,28 +401,25 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   // ===================== POS Receipt Formatting Helpers =====================
-  static const int _paperCharsPerLine = 42; // typical 80mm (can adjust if needed)
-
   String _center(String text) {
     text = text.trim();
     if (text.isEmpty) return '';
-    if (text.length >= _paperCharsPerLine) return text;
-    final totalPad = _paperCharsPerLine - text.length;
+    if (text.length >= _posCharsPerLine) return text;
+    final totalPad = _posCharsPerLine - text.length;
     final left = (totalPad / 2).floor();
     final right = totalPad - left;
     return ' ' * left + text + ' ' * right;
   }
 
-  String _horizontalLine() => '-' * _paperCharsPerLine;
+  String _horizontalLine() => '-' * _posCharsPerLine;
 
   String _leftRight(String left, String right) {
     left = left.trim();
     right = right.trim();
-    final space = _paperCharsPerLine - left.length - right.length;
+    final space = _posCharsPerLine - left.length - right.length;
     if (space < 1) {
-      // truncate left if overflow
-      final maxLeft = _paperCharsPerLine - right.length - 1;
-      if (maxLeft < 1) return (left + right).substring(0, _paperCharsPerLine);
+      final maxLeft = _posCharsPerLine - right.length - 1;
+      if (maxLeft < 1) return (left + right).substring(0, _posCharsPerLine);
       left = left.substring(0, maxLeft);
       return '$left ${right}';
     }
@@ -437,7 +436,7 @@ class _MyHomePageState extends State<MyHomePage> {
     final qtyStr = qty.length > 3 ? qty.substring(0, 3) : qty;
     final qtyField = qtyStr.padRight(qtyWidth);
     // Remaining width for name = total - qtyWidth - priceWidth
-    final nameWidth = _paperCharsPerLine - qtyWidth - priceWidth;
+    final nameWidth = _posCharsPerLine - qtyWidth - priceWidth;
     String nameTrunc = name;
     if (nameTrunc.length > nameWidth) nameTrunc = nameTrunc.substring(0, nameWidth);
     final priceField = price.padLeft(priceWidth);
@@ -466,7 +465,7 @@ class _MyHomePageState extends State<MyHomePage> {
     };
 
     if (_locationText.trim().isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _locationText.trim() + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(_locationText.trim()) + '\n' }));
     }
 
     // Centered 'Receipt'
@@ -892,6 +891,31 @@ class _MyHomePageState extends State<MyHomePage> {
                   children: [
                     Text('POS Receipt Fields', style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Chars / Line'),
+                              Slider(
+                                value: _posCharsPerLine.toDouble(),
+                                min: 24,
+                                max: 64,
+                                divisions: 40,
+                                label: _posCharsPerLine.toString(),
+                                onChanged: (v) => setState(() => _posCharsPerLine = v.round()),
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(
+                          width: 60,
+                          child: Text('${_posCharsPerLine}', textAlign: TextAlign.center),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
                     TextField(
                       controller: _headerControllerPos,
                       decoration: const InputDecoration(labelText: 'Header Title', border: OutlineInputBorder()),
