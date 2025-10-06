@@ -3,6 +3,7 @@
 //
 
 #import "EpsonSDKWrapper.h"
+#import <UIKit/UIKit.h>
 
 // Private interface
 @interface EpsonSDKWrapper ()
@@ -182,7 +183,7 @@
     for (NSDictionary *command in commands) {
         NSString *type = command[@"type"];
         NSLog(@"Processing command type: %@", type);
-        
+
         // Handle both old format (addText) and new format (text)
         if ([type isEqualToString:@"addText"] || [type isEqualToString:@"text"]) {
             NSDictionary *parameters = command[@"parameters"];
@@ -210,6 +211,79 @@
         } else if ([type isEqualToString:@"addCut"] || [type isEqualToString:@"cut"]) {
             NSLog(@"Adding cut command");
             [self.printer addCut:EPOS2_CUT_FEED];
+        } else if ([type isEqualToString:@"image"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *imagePath = parameters[@"imagePath"];
+            if (!imagePath || imagePath.length == 0) {
+                NSLog(@"WARNING: Image command missing imagePath");
+                continue;
+            }
+            BOOL debug = NO;
+            id debugVal = parameters[@"debug"];
+            if ([debugVal isKindOfClass:[NSNumber class]]) { debug = [debugVal boolValue]; }
+            NSString *align = parameters[@"align"] ?: @"left";
+            NSNumber *targetWidthNum = parameters[@"targetWidth"];
+            int targetWidth = targetWidthNum ? targetWidthNum.intValue : 0; // in dots/pixels
+
+            if (debug) { [self.printer addText:@"[IOS_IMG_START]\n"]; }
+            NSLog(@"IMAGE: Loading image at path: %@ (targetWidth=%d)", imagePath, targetWidth);
+
+            UIImage *image = [UIImage imageWithContentsOfFile:imagePath];
+            if (!image) {
+                NSLog(@"ERROR: Failed to load image from path: %@", imagePath);
+                if (debug) { [self.printer addText:@"[IOS_IMG_DECODE_FAILED]\n"]; }
+                continue;
+            }
+
+            // Convert to a working copy and optionally scale
+            UIImage *working = image;
+            int originalPixelWidth = (int)(image.size.width * image.scale);
+            if (targetWidth > 0 && originalPixelWidth > targetWidth) {
+                CGFloat scaleFactor = (CGFloat)targetWidth / (CGFloat)originalPixelWidth;
+                CGSize newSize = CGSizeMake(image.size.width * scaleFactor, image.size.height * scaleFactor);
+                UIGraphicsBeginImageContextWithOptions(newSize, NO, 1.0); // 1.0 so width in points == target pixel width
+                [image drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
+                UIImage *scaled = UIGraphicsGetImageFromCurrentImageContext();
+                UIGraphicsEndImageContext();
+                if (scaled) {
+                    working = scaled;
+                    NSLog(@"IMAGE: Scaled from %dpx to %dpx", originalPixelWidth, targetWidth);
+                } else {
+                    NSLog(@"WARNING: Scaling failed, using original image");
+                }
+            }
+
+            // Alignment (affects subsequent render until changed). Keep simple as Android implementation.
+            if ([align.lowercaseString isEqualToString:@"center"]) {
+                [self.printer addTextAlign:EPOS2_ALIGN_CENTER];
+            } else if ([align.lowercaseString isEqualToString:@"right"]) {
+                [self.printer addTextAlign:EPOS2_ALIGN_RIGHT];
+            } else {
+                [self.printer addTextAlign:EPOS2_ALIGN_LEFT];
+            }
+
+            // Determine width/height in pixels for addImage
+            int finalPixelWidth = (int)(working.size.width * working.scale);
+            int finalPixelHeight = (int)(working.size.height * working.scale);
+
+            // Epson expects width/height arguments; we pass actual pixel dims.
+            int addResult = [self.printer addImage:working
+                                                x:0
+                                                y:0
+                                            width:finalPixelWidth
+                                           height:finalPixelHeight
+                                             color:EPOS2_COLOR_1
+                                              mode:EPOS2_MODE_MONO
+                                          halftone:EPOS2_HALFTONE_DITHER
+                                         brightness:1.0
+                                          compress:EPOS2_COMPRESS_AUTO];
+            NSLog(@"IMAGE: addImage result=%d", addResult);
+            if (addResult != EPOS2_SUCCESS) {
+                NSLog(@"ERROR: addImage failed with code %d", addResult);
+                if (debug) { [self.printer addText:[NSString stringWithFormat:@"[IOS_IMG_ADD_FAIL %d]\n", addResult]]; }
+            } else if (debug) {
+                [self.printer addText:@"[IOS_IMG_END]\n"]; // marker after successful add
+            }
         } else {
             NSLog(@"WARNING: Unknown command type: %@", type);
         }
