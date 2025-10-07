@@ -49,3 +49,4 @@ app.*.map.json
 /example_epos
 /example_epos_android
 /packages/epson_printer_android/android/libs
+git-filter-repo.py
