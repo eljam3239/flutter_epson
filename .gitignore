@@ -50,3 +50,4 @@ app.*.map.json
 /example_epos_android
 /packages/epson_printer_android/android/libs
 git-filter-repo.py
+packages/epson_printer_android/android/src/main/jniLibs/*

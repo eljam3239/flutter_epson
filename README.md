@@ -11,6 +11,8 @@ iOS:
 Android:
 1. Agree to the software license and download the Epson ePOS SDK for Android from https://support.epson.net/setupnavi/?PINF=swlist&OSC=WS&LG2=EN&MKN=TM-m30II
 2.  Add ePOS2.jar and ePOSEasySelect.jar to packages/epson_printer_android/android/libs.
+3.  Add the arm64-v8a, armeabi-v7a, x86 and x86_64 folders to packages/epson_printer_android/android/src/main.
+
 
 Tested:
 
