@@ -19,3 +19,4 @@ Cannot connect to Bluetooth while printer is wired via USB -- even if the user D
 
 ## TODO
 1. Generic discovery/connecting button for all 3 interfaces. 
+

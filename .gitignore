@@ -48,3 +48,4 @@ app.*.map.json
 /packages/epson_printer_ios/ios/Frameworks/*
 /example_epos
 /example_epos_android
+/packages/epson_printer_android/android/libs
