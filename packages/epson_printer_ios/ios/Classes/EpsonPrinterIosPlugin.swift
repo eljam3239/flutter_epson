@@ -11,6 +11,7 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private var target: String?
     private var printerSeries: Int32 = 29 // EPOS2_TM_M30III (based on the discovery result)
     private var printerLang: Int32 = 0 // EPOS2_MODEL_ANK
+    private var lastBluetoothDeviceNames: Set<String> = [] // Track Bluetooth discovered devices to filter from USB
     
     override init() {
         epsonWrapper = EpsonSDKWrapper()
@@ -109,6 +110,9 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             epsonWrapper.startBluetoothDiscovery { [weak self] printers in
                 print("DEBUG: Bluetooth discovery callback received with \(printers.count) printers")
                 
+                // Track device names to filter from USB discovery
+                var deviceNames = Set<String>()
+                
                 let printerStrings = printers.compactMap { printer -> String? in
                     guard let target = printer["target"] as? String,
                           let deviceName = printer["deviceName"] as? String else {
@@ -116,8 +120,12 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
                         return nil
                     }
                     print("DEBUG: Found Bluetooth printer - Target: \(target), Name: \(deviceName)")
+                    deviceNames.insert(deviceName) // Track for USB filtering
                     return "\(target):\(deviceName)"
                 }
+                
+                // Store discovered Bluetooth device names
+                self?.lastBluetoothDeviceNames = deviceNames
                 
                 print("DEBUG: Bluetooth discovery found \(printerStrings.count) printers: \(printerStrings)")
                 DispatchQueue.main.async { result(printerStrings) }
@@ -317,7 +325,7 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
         print("DEBUG: Starting USB printer discovery...")
         // USB discovery: use port type USB and deviceType PRINTER
         let EPOS2_PORTTYPE_USB_VALUE: Int32 = 4 // EPOS2_PORTTYPE_USB
-        epsonWrapper.startDiscovery(withFilter: EPOS2_PORTTYPE_USB_VALUE) { printers in
+        epsonWrapper.startDiscovery(withFilter: EPOS2_PORTTYPE_USB_VALUE) { [weak self] printers in
             var printerStrings = printers.compactMap { printer -> String? in
                 guard let target = printer["target"] as? String,
                       let deviceName = printer["deviceName"] as? String else { return nil }
@@ -325,19 +333,38 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             }
 
             if printerStrings.isEmpty {
-                // Fallback for iOS: discovery for USB may return 0. If an Epson accessory is connected,
-                // return a default USB target that connects to the first USB device.
+                // Fallback for iOS: Epson SDK USB discovery often returns empty even with USB connected.
+                // Use EAAccessory as fallback, but filter out devices already found via Bluetooth.
                 let accessories = EAAccessoryManager.shared().connectedAccessories
                 let epsonAccessories = accessories.filter { acc in
                     acc.protocolStrings.contains("com.epson.escpos") || acc.protocolStrings.contains("com.epson.posprinter")
                 }
+                
                 if !epsonAccessories.isEmpty {
-                    let names = epsonAccessories.map { $0.name }
-                    print("DEBUG: USB discovery empty. EAAccessory fallback found Epson accessories: \(names)")
-                    // Use the accessory names for display; target should be just 'USB:' so OS picks the first device
-                    // If multiple, still present one entry per accessory to help the user choose visually
-                    let fallback = epsonAccessories.map { "USB::\($0.name)" }
-                    printerStrings.append(contentsOf: fallback)
+                    print("DEBUG: USB discovery empty. Found \(epsonAccessories.count) EAAccessory devices")
+                    
+                    // Filter: Exclude devices that were found in Bluetooth discovery
+                    var usbOnlyAccessories: [EAAccessory] = []
+                    
+                    for acc in epsonAccessories {
+                        print("DEBUG: EAAccessory: \(acc.name), connectionID: \(acc.connectionID), protocols: \(acc.protocolStrings)")
+                        
+                        // If this device name was found in Bluetooth discovery, skip it (it's Bluetooth, not USB)
+                        if self?.lastBluetoothDeviceNames.contains(acc.name) == true {
+                            print("DEBUG: Filtering out \(acc.name) - found in Bluetooth discovery")
+                            continue
+                        }
+                        
+                        usbOnlyAccessories.append(acc)
+                    }
+                    
+                    if !usbOnlyAccessories.isEmpty {
+                        let fallback = usbOnlyAccessories.map { "USB::\($0.name)" }
+                        print("DEBUG: Using EAAccessory USB fallback: \(fallback)")
+                        printerStrings.append(contentsOf: fallback)
+                    } else {
+                        print("DEBUG: All EAAccessory devices filtered out (appear to be Bluetooth)")
+                    }
                 } else {
                     print("DEBUG: USB discovery empty and no Epson EAAccessory found")
                 }

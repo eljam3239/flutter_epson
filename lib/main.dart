@@ -40,6 +40,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String _printerStatus = 'Unknown';
   String? _selectedPrinter;
   bool _openDrawerAfterPrint = true;
+  bool _isDiscovering = false;
   
   // ================= Receipt Layout State (Structured Formatting) =================
   // Controllers for dynamic receipt fields. These will allow the user to build
@@ -162,6 +163,99 @@ class _MyHomePageState extends State<MyHomePage> {
         SnackBar(content: Text('Discovery failed: $e')),
       );
     }
+  }
+
+  Future<void> _discoverAllPrinters() async {
+    // Prevent concurrent discoveries
+    if (_isDiscovering) {
+      print('Discovery already in progress, ignoring tap');
+      return;
+    }
+    
+    if (!mounted) return;
+    
+    setState(() {
+      _isDiscovering = true;
+    });
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Discovering printers (LAN, Bluetooth, USB)...')),
+    );
+
+    int totalFound = 0;
+
+    // Discover LAN printers
+    try {
+      final lanPrinters = await EpsonPrinter.discoverPrinters();
+      setState(() {
+        final updated = List<String>.from(_discoveredPrinters);
+        updated.removeWhere((p) => p.startsWith('TCP:'));
+        updated.addAll(lanPrinters);
+        _discoveredPrinters = updated;
+      });
+      totalFound += lanPrinters.length;
+      print('LAN discovery found ${lanPrinters.length} printers');
+    } catch (e) {
+      print('LAN discovery error: $e');
+      // Continue even if LAN fails
+    }
+
+    // Small delay between discoveries to let SDK clean up
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    // Discover Bluetooth printers FIRST (iOS needs this to populate filter for USB)
+    try {
+      if (Platform.isAndroid) {
+        final bluetoothConnectStatus = await Permission.bluetoothConnect.status;
+        final bluetoothScanStatus = await Permission.bluetoothScan.status;
+        if (!bluetoothConnectStatus.isGranted || !bluetoothScanStatus.isGranted) {
+          await _checkAndRequestPermissions();
+        }
+      }
+      final btPrinters = await EpsonPrinter.discoverBluetoothPrinters();
+      setState(() {
+        final updated = List<String>.from(_discoveredPrinters);
+        updated.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
+        updated.addAll(btPrinters);
+        _discoveredPrinters = updated;
+      });
+      totalFound += btPrinters.length;
+      print('Bluetooth discovery found ${btPrinters.length} printers');
+    } catch (e) {
+      print('Bluetooth discovery error: $e');
+      // Continue even if Bluetooth fails
+    }
+
+    // Small delay between discoveries to let SDK clean up
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    // Discover USB printers AFTER Bluetooth (so iOS can filter out BT devices)
+    try {
+      final usbPrinters = await EpsonPrinter.discoverUsbPrinters();
+      setState(() {
+        final updated = List<String>.from(_discoveredPrinters);
+        updated.removeWhere((p) => p.startsWith('USB:'));
+        updated.addAll(usbPrinters);
+        _discoveredPrinters = updated;
+        if (_selectedPrinter == null && _discoveredPrinters.isNotEmpty) {
+          _selectedPrinter = _discoveredPrinters.first;
+        }
+      });
+      totalFound += usbPrinters.length;
+      print('USB discovery found ${usbPrinters.length} printers');
+    } catch (e) {
+      print('USB discovery error: $e');
+      // Continue even if USB fails
+    }
+
+    setState(() {
+      _isDiscovering = false;
+    });
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Discovery complete! Found $totalFound total printers')),
+    );
   }
 
   Future<void> _connectToPrinter() async {
@@ -921,6 +1015,14 @@ class _MyHomePageState extends State<MyHomePage> {
                       runSpacing: 8,
                       children: <Widget>[
                         ElevatedButton(onPressed: _checkAndRequestPermissions, child: const Text('Check Permissions')),
+                        ElevatedButton(
+                          onPressed: _discoverAllPrinters,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Discover Printers'),
+                        ),
                         ElevatedButton(onPressed: _discoverPrinters, child: const Text('Discover LAN')),
                         ElevatedButton(onPressed: _discoverBluetoothPrinters, child: const Text('Discover Bluetooth')),
                         ElevatedButton(onPressed: _discoverUsbPrinters, child: const Text('Discover USB')),
