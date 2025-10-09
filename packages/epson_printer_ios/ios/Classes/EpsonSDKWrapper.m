@@ -26,9 +26,15 @@
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            // Stop any existing discovery first (loop until not processing)
-            int stopRet = EPOS2_SUCCESS;
-            do { stopRet = [Epos2Discovery stop]; } while (stopRet == EPOS2_ERR_PROCESSING);
+            // Stop any existing discovery first (non-blocking)
+            int stopRet = [Epos2Discovery stop];
+            if (stopRet == EPOS2_SUCCESS || stopRet == EPOS2_ERR_PARAM) {
+                NSLog(@"Stopped any previous discovery (result: %d)", stopRet);
+            } else if (stopRet == EPOS2_ERR_ILLEGAL) {
+                NSLog(@"No previous discovery to stop (result: %d)", stopRet);
+            } else {
+                NSLog(@"Warning: Could not stop previous discovery (result: %d)", stopRet);
+            }
             
             [self.discoveredPrinters removeAllObjects];
             self.discoveryCompletionHandler = completion;
@@ -47,8 +53,8 @@
             NSLog(@"Discovery start result: %d (EPOS2_SUCCESS=0)", result);
             if (result != EPOS2_SUCCESS) { completion(@[]); self.discoveryCompletionHandler = nil; return; }
             
-            // Timeout: 10s then stop (on main) and complete
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            // Timeout: 5s then stop (on main) and complete
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 NSLog(@"Discovery timeout reached, stopping discovery...");
                 int sret = EPOS2_SUCCESS;
                 do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
@@ -334,10 +340,16 @@
     // Use background QoS to avoid priority inversion warnings
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @try {
-            // Ensure stop/start on main queue (Epson SDK requirement)
+            // Ensure stop on main queue (Epson SDK requirement)
             dispatch_async(dispatch_get_main_queue(), ^{
-                int stopRet = EPOS2_SUCCESS;
-                do { stopRet = [Epos2Discovery stop]; } while (stopRet == EPOS2_ERR_PROCESSING);
+                int stopRet = [Epos2Discovery stop];
+                if (stopRet == EPOS2_SUCCESS || stopRet == EPOS2_ERR_PARAM) {
+                    NSLog(@"Stopped any previous Bluetooth discovery (result: %d)", stopRet);
+                } else if (stopRet == EPOS2_ERR_ILLEGAL) {
+                    NSLog(@"No previous Bluetooth discovery to stop (result: %d)", stopRet);
+                } else {
+                    NSLog(@"Warning: Could not stop previous Bluetooth discovery (result: %d)", stopRet);
+                }
             });
             
             [self.discoveredPrinters removeAllObjects];

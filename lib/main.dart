@@ -172,6 +172,18 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
     
+    // Warn if still connected
+    if (_isConnected) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please disconnect from printer before discovering new printers'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+    
     if (!mounted) return;
     
     setState(() {
@@ -200,8 +212,9 @@ class _MyHomePageState extends State<MyHomePage> {
       // Continue even if LAN fails
     }
 
-    // Small delay between discoveries to let SDK clean up
-    await Future.delayed(const Duration(milliseconds: 300));
+    // Longer delay before Bluetooth to let EAAccessory state settle after cable changes
+    // This prevents thread priority inversion in the iOS SDK
+    await Future.delayed(const Duration(milliseconds: 2000));
 
     // Discover Bluetooth printers FIRST (iOS needs this to populate filter for USB)
     try {
@@ -226,8 +239,8 @@ class _MyHomePageState extends State<MyHomePage> {
       // Continue even if Bluetooth fails
     }
 
-    // Small delay between discoveries to let SDK clean up
-    await Future.delayed(const Duration(milliseconds: 300));
+    // Delay between discoveries to ensure SDK completes previous discovery
+    await Future.delayed(const Duration(milliseconds: 500));
 
     // Discover USB printers AFTER Bluetooth (so iOS can filter out BT devices)
     try {
