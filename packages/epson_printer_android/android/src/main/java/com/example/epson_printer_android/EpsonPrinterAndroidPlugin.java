@@ -243,6 +243,34 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
   }
 
   private void connectPrinter(@NonNull MethodCall call, @NonNull Result result) {
+    // CRITICAL: Ensure discovery is stopped before ANY connection attempt
+    // Do this synchronously with retries to guarantee BT stack is clear
+    for (int i = 0; i < 30; i++) {
+      try {
+        Discovery.stop();
+        break; // Success
+      } catch (Epos2Exception e) {
+        if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+          break; // Already stopped or other error
+        }
+        // Still processing, wait and retry
+        try {
+          Thread.sleep(100);
+        } catch (InterruptedException ie) {
+          break;
+        }
+      } catch (Exception e) {
+        break; // Unexpected error, continue anyway
+      }
+    }
+    
+    // Additional settling delay for BT stack
+    try {
+      Thread.sleep(500);
+    } catch (InterruptedException e) {
+      // Continue
+    }
+    
     try {
       @SuppressWarnings("unchecked")
       Map<String, Object> args = (Map<String, Object>) call.arguments;
@@ -309,10 +337,16 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
       result.success(null);
     } catch (Epos2Exception e) {
       safeDisposePrinter();
-      result.error("CONNECT_FAILED", "Epson SDK error: " + e.getMessage(), e.getErrorStatus());
+      String errorMsg = "Connection failed. ";
+      if (e.getErrorStatus() == Epos2Exception.ERR_CONNECT) {
+        errorMsg += "Make sure your printer isn't connected to any other device via Bluetooth and try again.";
+      } else {
+        errorMsg += "Epson SDK error: " + e.getMessage();
+      }
+      result.error("CONNECT_FAILED", errorMsg, e.getErrorStatus());
     } catch (Exception ex) {
       safeDisposePrinter();
-      result.error("CONNECT_FAILED", ex.getMessage(), null);
+      result.error("CONNECT_FAILED", "Connection failed: " + ex.getMessage(), null);
     }
   }
 

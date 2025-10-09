@@ -104,12 +104,12 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private func discoverBluetoothPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
         print("DEBUG: Starting Bluetooth printer discovery...")
         
-        // First: active discovery (BLE with fallback to Classic BT)
+        // Optimized: single discovery pass (Classic BT finds paired devices quickly)
         do {
-            epsonWrapper.startBluetoothDiscovery { [weak self] livePrinters in
-                print("DEBUG: Bluetooth discovery callback received with \(livePrinters.count) printers")
+            epsonWrapper.startBluetoothDiscovery { [weak self] printers in
+                print("DEBUG: Bluetooth discovery callback received with \(printers.count) printers")
                 
-                let liveStrings = livePrinters.compactMap { printer -> String? in
+                let printerStrings = printers.compactMap { printer -> String? in
                     guard let target = printer["target"] as? String,
                           let deviceName = printer["deviceName"] as? String else {
                         print("DEBUG: Skipping printer with missing target or deviceName")
@@ -119,23 +119,8 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
                     return "\(target):\(deviceName)"
                 }
                 
-                // Second: paired discovery to include already paired devices
-                self?.epsonWrapper.findPairedBluetoothPrinters { pairedPrinters in
-                    print("DEBUG: Paired Bluetooth discovery callback received with \(pairedPrinters.count) printers")
-                    let pairedStrings = pairedPrinters.compactMap { printer -> String? in
-                        guard let target = printer["target"] as? String,
-                              let deviceName = printer["deviceName"] as? String else { return nil }
-                        return "\(target):\(deviceName)"
-                    }
-                    
-                    // Merge and de-dupe
-                    var set = Set<String>()
-                    liveStrings.forEach { set.insert($0) }
-                    pairedStrings.forEach { set.insert($0) }
-                    let all = Array(set)
-                    print("DEBUG: Bluetooth combined discovery found \(all.count) printers: \(all)")
-                    DispatchQueue.main.async { result(all) }
-                }
+                print("DEBUG: Bluetooth discovery found \(printerStrings.count) printers: \(printerStrings)")
+                DispatchQueue.main.async { result(printerStrings) }
             }
         } catch {
             print("DEBUG: Bluetooth discovery threw error: \(error)")
@@ -237,7 +222,7 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             } else {
               print("DEBUG: Connection failed")
               result(FlutterError(code: "CONNECTION_FAILED", 
-                                message: "Failed to connect to printer", 
+                                message: "Connection failed. Make sure your printer isn't connected to any other device via Bluetooth and try again.", 
                                 details: nil))
             }
           }

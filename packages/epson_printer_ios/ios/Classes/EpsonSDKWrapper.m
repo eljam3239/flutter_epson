@@ -330,15 +330,23 @@
 - (void)startBluetoothDiscoveryWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion {
     NSLog(@"startBluetoothDiscoveryWithCompletion called");
     if (!completion) { NSLog(@"ERROR: No completion handler provided for Bluetooth discovery"); return; }
-    dispatch_async(dispatch_get_main_queue(), ^{
+    
+    // Use background QoS to avoid priority inversion warnings
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @try {
-            int stopRet = EPOS2_SUCCESS;
-            do { stopRet = [Epos2Discovery stop]; } while (stopRet == EPOS2_ERR_PROCESSING);
+            // Ensure stop/start on main queue (Epson SDK requirement)
+            dispatch_async(dispatch_get_main_queue(), ^{
+                int stopRet = EPOS2_SUCCESS;
+                do { stopRet = [Epos2Discovery stop]; } while (stopRet == EPOS2_ERR_PROCESSING);
+            });
+            
             [self.discoveredPrinters removeAllObjects];
             self.discoveryCompletionHandler = completion;
             
-            // Try BLE first, then fallback to Classic BT
-            [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH_LE withFallback:YES];
+            // Start with Classic BT (faster for already-paired devices, BLE often fails anyway)
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
+            });
         } @catch (NSException *exception) {
             NSLog(@"Exception in startBluetoothDiscovery: %@", exception);
             completion(@[]);
@@ -374,7 +382,8 @@
         return;
     }
     
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    // Reduce timeout to 8 seconds (faster UX, Classic BT finds devices quickly if paired)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSLog(@"%@ discovery timeout reached, stopping discovery...", portTypeName);
         int sret = EPOS2_SUCCESS;
         do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
@@ -510,6 +519,19 @@
     };
     
     [self.discoveredPrinters addObject:printerInfo];
+    
+    // Early termination: for Bluetooth, stop after finding first device (faster UX)
+    if (self.discoveredPrinters.count == 1) {
+        NSLog(@"First Bluetooth device found, stopping discovery early for faster response");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            int sret = EPOS2_SUCCESS;
+            do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
+            if (self.discoveryCompletionHandler) {
+                self.discoveryCompletionHandler([self.discoveredPrinters copy]);
+                self.discoveryCompletionHandler = nil;
+            }
+        });
+    }
 }
 
 - (void)onComplete {
