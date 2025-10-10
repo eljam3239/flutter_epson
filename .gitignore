@@ -51,3 +51,4 @@ app.*.map.json
 /packages/epson_printer_android/android/libs
 git-filter-repo.py
 packages/epson_printer_android/android/src/main/jniLibs/*
+packages/epson_printer_ios/ePOS2_Discovery

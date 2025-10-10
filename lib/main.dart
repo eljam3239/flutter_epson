@@ -41,6 +41,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String? _selectedPrinter;
   bool _openDrawerAfterPrint = true;
   bool _isDiscovering = false;
+  bool _usbWasConnectedThisSession = false; // iOS: track if USB ever connected (BT hardware turns off)
   
   // ================= Receipt Layout State (Structured Formatting) =================
   // Controllers for dynamic receipt fields. These will allow the user to build
@@ -191,7 +192,7 @@ class _MyHomePageState extends State<MyHomePage> {
     });
     
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Discovering printers (LAN, Bluetooth, USB)...')),
+      SnackBar(content: Text('Discovering printers (LAN${Platform.isIOS ? ', USB' : ', Bluetooth, USB'})...')),
     );
 
     int totalFound = 0;
@@ -212,39 +213,50 @@ class _MyHomePageState extends State<MyHomePage> {
       // Continue even if LAN fails
     }
 
-    // Longer delay before Bluetooth to let EAAccessory state settle after cable changes
-    // This prevents thread priority inversion in the iOS SDK
-    await Future.delayed(const Duration(milliseconds: 2000));
+    // Small delay to let SDK fully clean up between discoveries
+    await Future.delayed(const Duration(milliseconds: 500));
 
-    // Discover Bluetooth printers FIRST (iOS needs this to populate filter for USB)
-    try {
-      if (Platform.isAndroid) {
-        final bluetoothConnectStatus = await Permission.bluetoothConnect.status;
-        final bluetoothScanStatus = await Permission.bluetoothScan.status;
-        if (!bluetoothConnectStatus.isGranted || !bluetoothScanStatus.isGranted) {
-          await _checkAndRequestPermissions();
+    // Discover Bluetooth printers
+    // iOS: Skip if USB was ever connected (BT hardware turns off and won't come back until app restart)
+    if (Platform.isIOS && _usbWasConnectedThisSession) {
+      print('iOS: Skipping Bluetooth discovery - USB was connected this session');
+    } else {
+      try {
+        if (Platform.isAndroid) {
+          final bluetoothConnectStatus = await Permission.bluetoothConnect.status;
+          final bluetoothScanStatus = await Permission.bluetoothScan.status;
+          if (!bluetoothConnectStatus.isGranted || !bluetoothScanStatus.isGranted) {
+            await _checkAndRequestPermissions();
+          }
         }
+        final btPrinters = await EpsonPrinter.discoverBluetoothPrinters();
+        setState(() {
+          final updated = List<String>.from(_discoveredPrinters);
+          updated.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
+          updated.addAll(btPrinters);
+          _discoveredPrinters = updated;
+        });
+        totalFound += btPrinters.length;
+        print('Bluetooth discovery found ${btPrinters.length} printers');
+      } catch (e) {
+        print('Bluetooth discovery error: $e');
+        // Continue even if Bluetooth fails
       }
-      final btPrinters = await EpsonPrinter.discoverBluetoothPrinters();
-      setState(() {
-        final updated = List<String>.from(_discoveredPrinters);
-        updated.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
-        updated.addAll(btPrinters);
-        _discoveredPrinters = updated;
-      });
-      totalFound += btPrinters.length;
-      print('Bluetooth discovery found ${btPrinters.length} printers');
-    } catch (e) {
-      print('Bluetooth discovery error: $e');
-      // Continue even if Bluetooth fails
     }
 
-    // Delay between discoveries to ensure SDK completes previous discovery
+    // Small delay to let SDK fully clean up between discoveries
     await Future.delayed(const Duration(milliseconds: 500));
 
     // Discover USB printers AFTER Bluetooth (so iOS can filter out BT devices)
     try {
       final usbPrinters = await EpsonPrinter.discoverUsbPrinters();
+      
+      // iOS: Mark that USB was discovered - BT hardware will be disabled from now on
+      if (Platform.isIOS && usbPrinters.isNotEmpty) {
+        _usbWasConnectedThisSession = true;
+        print('iOS: USB connected - Bluetooth hardware now disabled on printer');
+      }
+      
       setState(() {
         final updated = List<String>.from(_discoveredPrinters);
         updated.removeWhere((p) => p.startsWith('USB:'));
@@ -256,13 +268,6 @@ class _MyHomePageState extends State<MyHomePage> {
       });
       totalFound += usbPrinters.length;
       print('USB discovery found ${usbPrinters.length} printers');
-      
-      // CRITICAL: Add extended cooldown after USB discovery on iOS
-      // USB discovery triggers BLE internally, needs time to fully clean up
-      // to prevent priority inversion on subsequent discoveries
-      if (Platform.isIOS) {
-        await Future.delayed(const Duration(milliseconds: 3000));
-      }
     } catch (e) {
       print('USB discovery error: $e');
       // Continue even if USB fails

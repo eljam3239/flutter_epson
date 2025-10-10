@@ -12,10 +12,59 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private var printerSeries: Int32 = 29 // EPOS2_TM_M30III (based on the discovery result)
     private var printerLang: Int32 = 0 // EPOS2_MODEL_ANK
     private var currentBluetoothDeviceNames: Set<String> = [] // Track CURRENT Bluetooth-connected devices
+    private var usbWasConnectedThisSession: Bool = false // Track if USB was ever connected (BT hardware turns off on iOS)
+    private var connectedAccessories: Set<String> = [] // Track currently connected EAAccessory devices
     
     override init() {
         epsonWrapper = EpsonSDKWrapper()
         super.init()
+        
+        // Register for EAAccessory connect/disconnect notifications for logging
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(accessoryDidConnect(_:)),
+            name: .EAAccessoryDidConnect,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(accessoryDidDisconnect(_:)),
+            name: .EAAccessoryDidDisconnect,
+            object: nil
+        )
+        EAAccessoryManager.shared().registerForLocalNotifications()
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        EAAccessoryManager.shared().unregisterForLocalNotifications()
+    }
+    
+    @objc private func accessoryDidConnect(_ notification: Notification) {
+        if let accessory = notification.userInfo?[EAAccessoryKey] as? EAAccessory {
+            print("DEBUG: EAAccessory connected: \(accessory.name)")
+            
+            // If this device is NOT already in our connected set, it means a cable was just plugged in
+            // (Bluetooth devices are already connected at app launch)
+            if !connectedAccessories.contains(accessory.name) {
+                print("DEBUG: NEW accessory connection detected - USB cable was just plugged in!")
+                print("DEBUG: Bluetooth hardware on printer is now OFF - disabling BT discovery for session")
+                usbWasConnectedThisSession = true
+                
+                // Cancel any pending Bluetooth timeout to prevent SDK corruption
+                // Note: The timeout is managed in Objective-C, so we call the wrapper to cancel it
+                epsonWrapper.cancelBluetoothTimeout()
+            }
+            
+            connectedAccessories.insert(accessory.name)
+        }
+    }
+    
+    @objc private func accessoryDidDisconnect(_ notification: Notification) {
+        if let accessory = notification.userInfo?[EAAccessoryKey] as? EAAccessory {
+            print("DEBUG: EAAccessory disconnected: \(accessory.name)")
+            connectedAccessories.remove(accessory.name)
+        }
     }
 
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -80,18 +129,47 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             epsonWrapper.startDiscovery(withFilter: filterOption) { [weak self] printers in
                 print("DEBUG: Discovery callback received with \(printers.count) printers")
                 
-                // Convert to legacy string format for backwards compatibility
-                let printerStrings = printers.compactMap { printer -> String? in
+                // Deduplicate: if both TCP: and TCPS: exist for same MAC, keep only TCP:
+                var seenMacs: [String: String] = [:] // MAC -> target
+                var printerStrings: [String] = []
+                
+                for printer in printers {
                     guard let target = printer["target"] as? String,
                           let deviceName = printer["deviceName"] as? String else {
                         print("DEBUG: Skipping printer with invalid data: \(printer)")
-                        return nil
+                        continue
                     }
+                    
+                    // Extract MAC address from target (e.g., "TCP:A4:D7:3C:AA:CA:01" or "TCPS:A4:D7:3C:AA:CA:01[...]")
+                    let mac = self?.extractMacAddress(from: target) ?? ""
+                    
+                    if !mac.isEmpty {
+                        if let existingTarget = seenMacs[mac] {
+                            // Prefer TCP over TCPS (TCP is standard, TCPS is secure/paired variant)
+                            if target.starts(with: "TCP:") && existingTarget.starts(with: "TCPS:") {
+                                print("DEBUG: Replacing TCPS with TCP for MAC \(mac)")
+                                if let index = printerStrings.firstIndex(where: { $0.starts(with: existingTarget) }) {
+                                    printerStrings.remove(at: index)
+                                }
+                                seenMacs[mac] = target
+                                printerStrings.append("\(target):\(deviceName)")
+                            } else if target.starts(with: "TCPS:") && existingTarget.starts(with: "TCP:") {
+                                print("DEBUG: Skipping TCPS duplicate, already have TCP for MAC \(mac)")
+                                continue
+                            }
+                        } else {
+                            seenMacs[mac] = target
+                            printerStrings.append("\(target):\(deviceName)")
+                        }
+                    } else {
+                        // No MAC, add as-is
+                        printerStrings.append("\(target):\(deviceName)")
+                    }
+                    
                     print("DEBUG: Found printer: \(target):\(deviceName)")
-                    return "\(target):\(deviceName)"
                 }
                 
-                print("DEBUG: Discovery completed. Found \(printerStrings.count) printers: \(printerStrings)")
+                print("DEBUG: Discovery completed. Found \(printerStrings.count) unique printers: \(printerStrings)")
                 
                 DispatchQueue.main.async {
                     result(printerStrings)
@@ -105,8 +183,38 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
         }
     }
     
+    private func extractMacAddress(from target: String) -> String {
+        // Extract MAC from "TCP:A4:D7:3C:AA:CA:01" or "TCPS:A4:D7:3C:AA:CA:01[local_printer]"
+        // Remove any bracketed suffix first
+        var cleanTarget = target
+        if let bracketIndex = target.firstIndex(of: "[") {
+            cleanTarget = String(target[..<bracketIndex])
+        }
+        
+        let parts = cleanTarget.split(separator: ":")
+        if parts.count >= 7 {
+            // Join the MAC parts (last 6 components after protocol)
+            return parts[1...6].joined(separator: ":")
+        }
+        return ""
+    }
+    
     private func discoverBluetoothPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
         print("DEBUG: Starting Bluetooth printer discovery...")
+        
+        // iOS hardware limitation: When USB cable connects, BT radio on printer physically turns off
+        // and cannot re-enable until manual reconnect in iOS Settings + app restart
+        if usbWasConnectedThisSession {
+            print("DEBUG: Skipping Bluetooth discovery - USB was connected this session")
+            print("DEBUG: iOS limitation: Printer's BT hardware disabled when USB connected")
+            print("DEBUG: User must manually reconnect in iOS Settings after unplugging USB")
+            currentBluetoothDeviceNames.removeAll()
+            DispatchQueue.main.async { result([]) }
+            return
+        }
+        
+        // Clear previous Bluetooth device tracking
+        currentBluetoothDeviceNames.removeAll()
         
         // Optimized: single discovery pass (Classic BT finds paired devices quickly)
         do {
@@ -121,8 +229,11 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
                     }
                     print("DEBUG: Found Bluetooth printer - Target: \(target), Name: \(deviceName)")
                     
-                    // Track this device name for USB filtering
-                    self?.currentBluetoothDeviceNames.insert(deviceName)
+                    // Track device name for USB filtering ONLY if it's actually Bluetooth
+                    // TCPS: targets are local USB connections masquerading as network, not Bluetooth
+                    if target.starts(with: "BT:") || target.starts(with: "BLE:") {
+                        self?.currentBluetoothDeviceNames.insert(deviceName)
+                    }
                     
                     return "\(target):\(deviceName)"
                 }
@@ -323,57 +434,41 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     
     private func discoverUsbPrinters(result: @escaping FlutterResult) {
         print("DEBUG: Starting USB printer discovery...")
-        print("DEBUG: Current Bluetooth tracking has \(currentBluetoothDeviceNames.count) devices")
         
-        // USB discovery: use port type USB and deviceType PRINTER
-        let EPOS2_PORTTYPE_USB_VALUE: Int32 = 4 // EPOS2_PORTTYPE_USB
-        epsonWrapper.startDiscovery(withFilter: EPOS2_PORTTYPE_USB_VALUE) { [weak self] printers in
-            var printerStrings = printers.compactMap { printer -> String? in
-                guard let target = printer["target"] as? String,
-                      let deviceName = printer["deviceName"] as? String else { return nil }
-                return "\(target):\(deviceName)"
-            }
-
-            if printerStrings.isEmpty {
-                // Fallback for iOS: Epson SDK USB discovery often returns empty even with USB connected.
-                // Use EAAccessory as fallback, but filter out Bluetooth-connected devices.
-                let accessories = EAAccessoryManager.shared().connectedAccessories
-                let epsonAccessories = accessories.filter { acc in
-                    acc.protocolStrings.contains("com.epson.escpos") || acc.protocolStrings.contains("com.epson.posprinter")
+        // IMPORTANT: Skip Epson SDK entirely for USB discovery
+        // The SDK's USB discovery internally triggers BLE finder which causes threading issues
+        // EAAccessory provides direct hardware enumeration without SDK overhead
+        print("DEBUG: Using EAAccessory-only mode (bypassing SDK to avoid BLE threading issues)")
+        
+        let accessories = EAAccessoryManager.shared().connectedAccessories
+        let epsonAccessories = accessories.filter { acc in
+            acc.protocolStrings.contains("com.epson.escpos") || acc.protocolStrings.contains("com.epson.posprinter")
+        }
+        
+        if !epsonAccessories.isEmpty {
+            print("DEBUG: Found \(epsonAccessories.count) EAAccessory devices")
+            print("DEBUG: Current Bluetooth device names: \(currentBluetoothDeviceNames)")
+            
+            // Filter out devices that are Bluetooth connections
+            // EAAccessory shows BOTH USB and Bluetooth Classic devices
+            let usbPrinters = epsonAccessories.compactMap { acc -> String? in
+                print("DEBUG: EAAccessory device: \(acc.name), connectionID: \(acc.connectionID), protocols: \(acc.protocolStrings)")
+                
+                // If this device was discovered via Bluetooth, it's a BT connection, not USB
+                if currentBluetoothDeviceNames.contains(acc.name) {
+                    print("DEBUG: Skipping '\(acc.name)' - this is a Bluetooth connection, not USB")
+                    return nil
                 }
                 
-                if !epsonAccessories.isEmpty {
-                    print("DEBUG: USB discovery empty. Found \(epsonAccessories.count) EAAccessory devices")
-                    print("DEBUG: Current Bluetooth device names to filter: \(self?.currentBluetoothDeviceNames ?? [])")
-                    
-                    var usbOnlyDevices: [EAAccessory] = []
-                    
-                    for acc in epsonAccessories {
-                        print("DEBUG: EAAccessory: \(acc.name), connectionID: \(acc.connectionID), protocols: \(acc.protocolStrings)")
-                        
-                        // Filter out devices that are currently connected via Bluetooth
-                        if self?.currentBluetoothDeviceNames.contains(acc.name) == true {
-                            print("DEBUG: Filtering out '\(acc.name)' - currently connected via Bluetooth")
-                            continue
-                        }
-                        
-                        usbOnlyDevices.append(acc)
-                    }
-                    
-                    if !usbOnlyDevices.isEmpty {
-                        let fallback = usbOnlyDevices.map { "USB::\($0.name)" }
-                        print("DEBUG: Using EAAccessory USB fallback: \(fallback)")
-                        printerStrings.append(contentsOf: fallback)
-                    } else {
-                        print("DEBUG: All EAAccessory devices filtered (connected via Bluetooth)")
-                    }
-                } else {
-                    print("DEBUG: USB discovery empty and no Epson EAAccessory found")
-                }
+                print("DEBUG: Including '\(acc.name)' as USB device")
+                return "USB::\(acc.name)"
             }
-
-            print("DEBUG: USB discovery completed. Found \(printerStrings.count) printers: \(printerStrings)")
-            result(printerStrings)
+            
+            print("DEBUG: USB discovery completed. Found \(usbPrinters.count) USB printers: \(usbPrinters)")
+            result(usbPrinters)
+        } else {
+            print("DEBUG: No Epson EAAccessory devices found")
+            result([])
         }
     }
 }

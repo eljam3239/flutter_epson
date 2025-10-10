@@ -26,18 +26,9 @@
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            // Stop any existing discovery first
-            int stopRet = [Epos2Discovery stop];
-            if (stopRet == EPOS2_SUCCESS || stopRet == EPOS2_ERR_PARAM) {
-                NSLog(@"Stopped any previous discovery (result: %d)", stopRet);
-            } else if (stopRet == EPOS2_ERR_ILLEGAL) {
-                NSLog(@"No previous discovery to stop (result: %d)", stopRet);
-            } else {
-                NSLog(@"Warning: Could not stop previous discovery (result: %d)", stopRet);
-            }
-        
             [self.discoveredPrinters removeAllObjects];
             self.discoveryCompletionHandler = completion;
+            self.isBluetoothDiscovery = NO; // LAN/TCP discovery - no early termination
             
             Epos2FilterOption *filterOption = [[Epos2FilterOption alloc] init];
             if (!filterOption) { NSLog(@"ERROR: Failed to create filter option"); completion(@[]); self.discoveryCompletionHandler = nil; return; }
@@ -55,19 +46,7 @@
             // Timeout: 5s then stop and complete
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 NSLog(@"Discovery timeout reached, stopping discovery...");
-                int sret = EPOS2_SUCCESS;
-                do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
-                
-                // CRITICAL: For USB discovery, explicitly stop again after a delay
-                // to ensure internal BLE finder is fully terminated
-                if (filter == 4) {
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                        NSLog(@"USB discovery: forcing additional stop to clean up BLE finder...");
-                        int cleanupRet = EPOS2_SUCCESS;
-                        do { cleanupRet = [Epos2Discovery stop]; } while (cleanupRet == EPOS2_ERR_PROCESSING);
-                        NSLog(@"USB discovery BLE cleanup result: %d", cleanupRet);
-                    });
-                }
+                [Epos2Discovery stop];
                 
                 if (self.discoveryCompletionHandler) {
                     self.discoveryCompletionHandler([self.discoveredPrinters copy]);
@@ -85,6 +64,14 @@
         int result = EPOS2_SUCCESS;
         do { result = [Epos2Discovery stop]; } while (result == EPOS2_ERR_PROCESSING);
     });
+}
+
+- (void)cancelBluetoothTimeout {
+    if (self.bluetoothTimeoutBlock) {
+        NSLog(@"Cancelling pending Bluetooth timeout from previous discovery");
+        dispatch_block_cancel(self.bluetoothTimeoutBlock);
+        self.bluetoothTimeoutBlock = nil;
+    }
 }
 
 - (BOOL)connectToPrinter:(NSString *)target withSeries:(int32_t)series language:(int32_t)language timeout:(int32_t)timeout {
@@ -363,6 +350,7 @@
             
             [self.discoveredPrinters removeAllObjects];
             self.discoveryCompletionHandler = completion;
+            self.isBluetoothDiscovery = YES; // Enable early termination for BT
             
             // Start with Classic BT (faster for already-paired devices, BLE often fails anyway)
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -379,6 +367,13 @@
 - (void)tryBluetoothDiscovery:(int)portType withFallback:(BOOL)useFallback {
     NSString *portTypeName = (portType == EPOS2_PORTTYPE_BLUETOOTH_LE) ? @"Bluetooth LE" : @"Classic Bluetooth";
     NSLog(@"Trying %@ discovery...", portTypeName);
+    
+    // Cancel any pending Bluetooth timeout to prevent overlaps
+    if (self.bluetoothTimeoutBlock) {
+        NSLog(@"Cancelling previous Bluetooth timeout to prevent overlap");
+        dispatch_block_cancel(self.bluetoothTimeoutBlock);
+        self.bluetoothTimeoutBlock = nil;
+    }
     
     // Create filter option for the specified Bluetooth type
     Epos2FilterOption *bluetoothFilter = [[Epos2FilterOption alloc] init];
@@ -404,18 +399,28 @@
     }
     
     // Reduce timeout to 8 seconds (faster UX, Classic BT finds devices quickly if paired)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    __weak typeof(self) weakSelf = self;
+    self.bluetoothTimeoutBlock = dispatch_block_create(0, ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        
         NSLog(@"%@ discovery timeout reached, stopping discovery...", portTypeName);
         int sret = EPOS2_SUCCESS;
         do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
-        NSUInteger count = self.discoveredPrinters.count;
+        NSUInteger count = strongSelf.discoveredPrinters.count;
         if (count > 0 || !useFallback || portType == EPOS2_PORTTYPE_BLUETOOTH) {
-            if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler([self.discoveredPrinters copy]); self.discoveryCompletionHandler = nil; }
+            if (strongSelf.discoveryCompletionHandler) { 
+                strongSelf.discoveryCompletionHandler([strongSelf.discoveredPrinters copy]); 
+                strongSelf.discoveryCompletionHandler = nil; 
+            }
         } else {
             NSLog(@"No printers found with Bluetooth LE, trying Classic Bluetooth...");
-            [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
+            [strongSelf tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
         }
+        strongSelf.bluetoothTimeoutBlock = nil;
     });
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), self.bluetoothTimeoutBlock);
 }
 
 - (void)findPairedBluetoothPrintersWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion {
@@ -541,9 +546,17 @@
     
     [self.discoveredPrinters addObject:printerInfo];
     
-    // Early termination: for Bluetooth, stop after finding first device (faster UX)
-    if (self.discoveredPrinters.count == 1) {
+    // Early termination: ONLY for Bluetooth discovery, stop after finding first device (faster UX)
+    // DO NOT do this for LAN/TCP discovery - multiple stop() calls corrupt SDK state
+    if (self.isBluetoothDiscovery && self.discoveredPrinters.count == 1) {
         NSLog(@"First Bluetooth device found, stopping discovery early for faster response");
+        
+        // Cancel the timeout since we're completing early
+        if (self.bluetoothTimeoutBlock) {
+            dispatch_block_cancel(self.bluetoothTimeoutBlock);
+            self.bluetoothTimeoutBlock = nil;
+        }
+        
         dispatch_async(dispatch_get_main_queue(), ^{
             int sret = EPOS2_SUCCESS;
             do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);

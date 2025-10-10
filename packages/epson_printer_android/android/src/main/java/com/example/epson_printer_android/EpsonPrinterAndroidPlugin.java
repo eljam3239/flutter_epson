@@ -93,6 +93,20 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
   }
 
   private void discoverLanPrinters(@NonNull Result result) {
+    // CRITICAL: Force stop any existing discovery before starting new one
+    // This handles USB disconnect and other hardware state changes
+    for (int i = 0; i < 10; i++) {
+      try {
+        Discovery.stop();
+        break;
+      } catch (Epos2Exception e) {
+        if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+          break;
+        }
+        try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+      }
+    }
+    
     final List<String> found = new ArrayList<>();
     final FilterOption filter = new FilterOption();
     filter.setDeviceType(Discovery.TYPE_PRINTER);
@@ -151,6 +165,20 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
 
   // Bluetooth discovery (Classic only) + include bonded devices to handle Settings-paired printers
   private void discoverBluetoothPrinters(@NonNull Result result) {
+    // CRITICAL: Force stop any existing discovery before starting new one
+    // This handles USB disconnect and other hardware state changes
+    for (int i = 0; i < 10; i++) {
+      try {
+        Discovery.stop();
+        break;
+      } catch (Epos2Exception e) {
+        if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+          break;
+        }
+        try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+      }
+    }
+    
     final List<String> found = new ArrayList<>();
 
     // 1) Seed with bonded devices
@@ -380,6 +408,35 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         try { mPrinter.setReceiveEventListener(null); } catch (Exception ignored) {}
       }
       mPrinter = null;
+      
+      // CRITICAL: After disconnecting (especially from USB), synchronously clean up discovery state
+      // Wait for disconnect to fully complete, then aggressively stop discovery
+      try {
+        Thread.sleep(200); // Let disconnect fully complete
+      } catch (InterruptedException ignored) {}
+      
+      android.util.Log.d("EpsonPrinter", "Post-disconnect: starting aggressive discovery cleanup...");
+      for (int i = 0; i < 15; i++) {
+        try {
+          Discovery.stop();
+          android.util.Log.d("EpsonPrinter", "Post-disconnect discovery stop succeeded on attempt " + (i + 1));
+          break;
+        } catch (Epos2Exception e) {
+          if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+            android.util.Log.d("EpsonPrinter", "Post-disconnect discovery stop: non-processing error, done");
+            break;
+          }
+          android.util.Log.d("EpsonPrinter", "Post-disconnect discovery still processing, retry " + (i + 1));
+          try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+        }
+      }
+      
+      // Additional settling time after USB disconnect specifically
+      try {
+        Thread.sleep(300);
+      } catch (InterruptedException ignored) {}
+      
+      android.util.Log.d("EpsonPrinter", "Post-disconnect cleanup complete");
       result.success(null);
     } catch (Exception e) {
       mPrinter = null;
@@ -606,6 +663,20 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
 
   // Discover USB printers using Epson Discovery
   private void discoverUsbPrinters(@NonNull Result result) {
+    // CRITICAL: Force stop any existing discovery before starting new one
+    // This handles USB disconnect and other hardware state changes
+    for (int i = 0; i < 10; i++) {
+      try {
+        Discovery.stop();
+        break;
+      } catch (Epos2Exception e) {
+        if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+          break;
+        }
+        try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+      }
+    }
+    
     final List<String> found = new ArrayList<>();
 
     final FilterOption filter = new FilterOption();
@@ -645,6 +716,24 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
           }
         }
       }
+      
+      // CRITICAL: For USB discovery, add delayed cleanup stop to ensure BLE/BT is fully terminated
+      // This prevents thread priority inversion on subsequent discoveries (matches iOS fix)
+      new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+        android.util.Log.d("EpsonPrinter", "USB discovery: forcing additional stop to clean up internal discovery state...");
+        while (true) {
+          try {
+            Discovery.stop();
+            android.util.Log.d("EpsonPrinter", "USB discovery cleanup stop completed");
+            break;
+          } catch (Epos2Exception e) {
+            if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+              break;
+            }
+          }
+        }
+      }, 500);
+      
       synchronized (found) {
         result.success(new ArrayList<>(found));
       }
