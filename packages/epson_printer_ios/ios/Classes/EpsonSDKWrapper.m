@@ -26,7 +26,7 @@
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
-            // Stop any existing discovery first (non-blocking)
+            // Stop any existing discovery first
             int stopRet = [Epos2Discovery stop];
             if (stopRet == EPOS2_SUCCESS || stopRet == EPOS2_ERR_PARAM) {
                 NSLog(@"Stopped any previous discovery (result: %d)", stopRet);
@@ -35,14 +35,13 @@
             } else {
                 NSLog(@"Warning: Could not stop previous discovery (result: %d)", stopRet);
             }
-            
+        
             [self.discoveredPrinters removeAllObjects];
             self.discoveryCompletionHandler = completion;
             
             Epos2FilterOption *filterOption = [[Epos2FilterOption alloc] init];
             if (!filterOption) { NSLog(@"ERROR: Failed to create filter option"); completion(@[]); self.discoveryCompletionHandler = nil; return; }
             
-            // Match sample: restrict to printers and set port type if provided
             [filterOption setDeviceType:EPOS2_TYPE_PRINTER];
             if (filter != EPOS2_PARAM_UNSPECIFIED) {
                 [filterOption setPortType:filter];
@@ -53,11 +52,23 @@
             NSLog(@"Discovery start result: %d (EPOS2_SUCCESS=0)", result);
             if (result != EPOS2_SUCCESS) { completion(@[]); self.discoveryCompletionHandler = nil; return; }
             
-            // Timeout: 5s then stop (on main) and complete
+            // Timeout: 5s then stop and complete
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 NSLog(@"Discovery timeout reached, stopping discovery...");
                 int sret = EPOS2_SUCCESS;
                 do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
+                
+                // CRITICAL: For USB discovery, explicitly stop again after a delay
+                // to ensure internal BLE finder is fully terminated
+                if (filter == 4) {
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        NSLog(@"USB discovery: forcing additional stop to clean up BLE finder...");
+                        int cleanupRet = EPOS2_SUCCESS;
+                        do { cleanupRet = [Epos2Discovery stop]; } while (cleanupRet == EPOS2_ERR_PROCESSING);
+                        NSLog(@"USB discovery BLE cleanup result: %d", cleanupRet);
+                    });
+                }
+                
                 if (self.discoveryCompletionHandler) {
                     self.discoveryCompletionHandler([self.discoveredPrinters copy]);
                     self.discoveryCompletionHandler = nil;
@@ -69,9 +80,7 @@
             self.discoveryCompletionHandler = nil;
         }
     });
-}
-
-- (void)stopDiscovery {
+}- (void)stopDiscovery {
     dispatch_async(dispatch_get_main_queue(), ^{
         int result = EPOS2_SUCCESS;
         do { result = [Epos2Discovery stop]; } while (result == EPOS2_ERR_PROCESSING);

@@ -256,6 +256,13 @@ class _MyHomePageState extends State<MyHomePage> {
       });
       totalFound += usbPrinters.length;
       print('USB discovery found ${usbPrinters.length} printers');
+      
+      // CRITICAL: Add extended cooldown after USB discovery on iOS
+      // USB discovery triggers BLE internally, needs time to fully clean up
+      // to prevent priority inversion on subsequent discoveries
+      if (Platform.isIOS) {
+        await Future.delayed(const Duration(milliseconds: 3000));
+      }
     } catch (e) {
       print('USB discovery error: $e');
       // Continue even if USB fails
