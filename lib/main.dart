@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:io' show Platform;
+import 'dart:async';
 
 void main() {
   runApp(const MyApp());
@@ -42,6 +43,10 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _openDrawerAfterPrint = true;
   bool _isDiscovering = false;
   bool _usbWasConnectedThisSession = false; // iOS: track if USB ever connected (BT hardware turns off)
+  String _nativeDiscoveryState = 'idle';
+  bool _pendingWorkQueued = false;
+  int _lastSessionId = 0;
+  Timer? _statePollTimer;
   
   // ================= Receipt Layout State (Structured Formatting) =================
   // Controllers for dynamic receipt fields. These will allow the user to build
@@ -100,6 +105,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
     // POS style controller
     _headerControllerPos = TextEditingController(text: _headerTitle);
+
+    // Start polling native discovery state (lightweight call)
+    _startDiscoveryStatePolling();
   }
 
   @override
@@ -110,7 +118,40 @@ class _MyHomePageState extends State<MyHomePage> {
     _footerController.dispose();
     _logoBase64Controller.dispose();
     _headerControllerPos.dispose();
+    _statePollTimer?.cancel();
     super.dispose();
+  }
+
+  void _startDiscoveryStatePolling() {
+    _statePollTimer?.cancel();
+    _statePollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      try {
+        final state = await EpsonPrinter.getDiscoveryState();
+        final nativeState = (state['state'] as String?) ?? 'unknown';
+        final sessionId = (state['sessionId'] as int?) ?? 0;
+        final usbFlag = state['usbWasConnectedThisSession'] == true;
+        final pending = state['pendingWorkQueued'] == true;
+        if (!mounted) return;
+        setState(() {
+          _nativeDiscoveryState = nativeState;
+          _lastSessionId = sessionId;
+          final usbEver = usbFlag || _usbWasConnectedThisSession;
+          if (Platform.isIOS && usbEver) {
+            final hadBt = _discoveredPrinters.any((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
+            if (hadBt && !_isDiscovering) {
+              _discoveredPrinters.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
+              if (_selectedPrinter != null && (_selectedPrinter!.startsWith('BT:') || _selectedPrinter!.startsWith('BLE:'))) {
+                _selectedPrinter = _discoveredPrinters.isNotEmpty ? _discoveredPrinters.first : null;
+              }
+            }
+          }
+          _usbWasConnectedThisSession = usbEver;
+          _pendingWorkQueued = pending;
+        });
+      } catch (e) {
+        // Swallow errors during polling
+      }
+    });
   }
 
   Future<void> _checkAndRequestPermissions() async {
@@ -168,8 +209,8 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _discoverAllPrinters() async {
     // Prevent concurrent discoveries
-    if (_isDiscovering) {
-      print('Discovery already in progress, ignoring tap');
+    if (_isDiscovering || _nativeDiscoveryState != 'idle') {
+      print('Discovery already in progress or native state not idle ($_nativeDiscoveryState)');
       return;
     }
     
@@ -195,17 +236,14 @@ class _MyHomePageState extends State<MyHomePage> {
       SnackBar(content: Text('Discovering printers (LAN${Platform.isIOS ? ', USB' : ', Bluetooth, USB'})...')),
     );
 
+    // Build a fresh snapshot each time to avoid stale entries from prior runs
+    final List<String> snapshot = [];
     int totalFound = 0;
 
     // Discover LAN printers
     try {
       final lanPrinters = await EpsonPrinter.discoverPrinters();
-      setState(() {
-        final updated = List<String>.from(_discoveredPrinters);
-        updated.removeWhere((p) => p.startsWith('TCP:'));
-        updated.addAll(lanPrinters);
-        _discoveredPrinters = updated;
-      });
+      snapshot.addAll(lanPrinters);
       totalFound += lanPrinters.length;
       print('LAN discovery found ${lanPrinters.length} printers');
     } catch (e) {
@@ -230,12 +268,7 @@ class _MyHomePageState extends State<MyHomePage> {
           }
         }
         final btPrinters = await EpsonPrinter.discoverBluetoothPrinters();
-        setState(() {
-          final updated = List<String>.from(_discoveredPrinters);
-          updated.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
-          updated.addAll(btPrinters);
-          _discoveredPrinters = updated;
-        });
+        snapshot.addAll(btPrinters);
         totalFound += btPrinters.length;
         print('Bluetooth discovery found ${btPrinters.length} printers');
       } catch (e) {
@@ -257,15 +290,7 @@ class _MyHomePageState extends State<MyHomePage> {
         print('iOS: USB connected - Bluetooth hardware now disabled on printer');
       }
       
-      setState(() {
-        final updated = List<String>.from(_discoveredPrinters);
-        updated.removeWhere((p) => p.startsWith('USB:'));
-        updated.addAll(usbPrinters);
-        _discoveredPrinters = updated;
-        if (_selectedPrinter == null && _discoveredPrinters.isNotEmpty) {
-          _selectedPrinter = _discoveredPrinters.first;
-        }
-      });
+      snapshot.addAll(usbPrinters);
       totalFound += usbPrinters.length;
       print('USB discovery found ${usbPrinters.length} printers');
     } catch (e) {
@@ -273,14 +298,37 @@ class _MyHomePageState extends State<MyHomePage> {
       // Continue even if USB fails
     }
 
+    // iOS: if USB was ever connected, ensure no BT/BLE entries are shown
+    if (Platform.isIOS && _usbWasConnectedThisSession) {
+      snapshot.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
+    }
+
+    // Commit snapshot and selection
     setState(() {
       _isDiscovering = false;
+      _discoveredPrinters = snapshot;
+      if (_selectedPrinter == null || !_discoveredPrinters.contains(_selectedPrinter)) {
+        _selectedPrinter = _discoveredPrinters.isNotEmpty ? _discoveredPrinters.first : null;
+      }
     });
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Discovery complete! Found $totalFound total printers')),
     );
+  }
+
+  Future<void> _abortDiscoveryIfNeeded() async {
+    try {
+      if (_nativeDiscoveryState != 'idle') {
+        await EpsonPrinter.abortDiscovery();
+        // Poll immediately after abort
+        final state = await EpsonPrinter.getDiscoveryState();
+        setState(() { _nativeDiscoveryState = (state['state'] as String?) ?? 'idle'; });
+      }
+    } catch (e) {
+      // Ignore abort errors
+    }
   }
 
   Future<void> _connectToPrinter() async {
@@ -731,6 +779,21 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _discoverBluetoothPrinters() async {
     try {
+      // iOS: If USB was connected in this app session, the printer disables BT radio.
+      // Purge any stale BT entries and skip discovery.
+      if (Platform.isIOS && _usbWasConnectedThisSession) {
+        setState(() {
+          _discoveredPrinters.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
+          if (_selectedPrinter != null && (_selectedPrinter!.startsWith('BT:') || _selectedPrinter!.startsWith('BLE:'))) {
+            _selectedPrinter = _discoveredPrinters.isNotEmpty ? _discoveredPrinters.first : null;
+          }
+        });
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bluetooth disabled on printer after USB connect; skipping Bluetooth discovery.')),
+        );
+        return;
+      }
       if (Platform.isAndroid) {
         final bluetoothConnectStatus = await Permission.bluetoothConnect.status;
         final bluetoothScanStatus = await Permission.bluetoothScan.status;
@@ -789,6 +852,14 @@ class _MyHomePageState extends State<MyHomePage> {
         final updated = List<String>.from(_discoveredPrinters);
         updated.removeWhere((p) => p.startsWith('USB:'));
         updated.addAll(printers.where((p) => p.startsWith('USB:')));
+        if (Platform.isIOS && printers.any((p) => p.startsWith('USB:'))) {
+          _usbWasConnectedThisSession = true;
+          // Purge any BT entries once USB is seen (printer BT hardware turned off)
+          updated.removeWhere((p) => p.startsWith('BT:') || p.startsWith('BLE:'));
+          if (_selectedPrinter != null && (_selectedPrinter!.startsWith('BT:') || _selectedPrinter!.startsWith('BLE:'))) {
+            _selectedPrinter = null;
+          }
+        }
         _discoveredPrinters = updated;
         if (_selectedPrinter == null && _discoveredPrinters.isNotEmpty) {
           _selectedPrinter = _discoveredPrinters.first;
@@ -818,6 +889,8 @@ class _MyHomePageState extends State<MyHomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.start,
           children: <Widget>[
+            
+            const SizedBox(height: 8),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -966,6 +1039,24 @@ class _MyHomePageState extends State<MyHomePage> {
                   ],
                 ),
               ),
+            ),
+            // Native discovery state banner (references session and queued work so fields aren't unused)
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Discovery state: '
+                    '$_nativeDiscoveryState | session=$_lastSessionId'
+                    '${_pendingWorkQueued ? ' | queued' : ''}',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
+                if (_nativeDiscoveryState != 'idle')
+                  TextButton(
+                    onPressed: _abortDiscoveryIfNeeded,
+                    child: const Text('Abort'),
+                  ),
+              ],
             ),
             const SizedBox(height: 16),
             Card(

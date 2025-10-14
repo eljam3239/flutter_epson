@@ -76,4 +76,15 @@ class MethodChannelEpsonPrinter extends EpsonPrinterPlatform {
     final result = await methodChannel.invokeMethod<bool>('isConnected');
     return result ?? false;
   }
+
+  @override
+  Future<Map<String, dynamic>> getDiscoveryState() async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>('getDiscoveryState');
+    return Map<String, dynamic>.from(result ?? {});
+  }
+
+  @override
+  Future<void> abortDiscovery() async {
+    await methodChannel.invokeMethod<void>('abortDiscovery');
+  }
 }

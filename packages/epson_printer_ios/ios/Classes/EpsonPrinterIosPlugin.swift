@@ -123,7 +123,8 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
                             if self.discoveryState == .suspendedAfterUsbDisconnect {
                                 self.discoveryState = .idle
                                 print("DEBUG: Cooldown ended -> idle (session=\(cooldownSession))")
-                                if let work = self.pendingDiscoveryWork { self.pendingDiscoveryWork = nil; work() }
+                                // Do not auto-run any queued discovery; Dart side should trigger explicitly
+                                self.pendingDiscoveryWork = nil
                             }
                             self.clearWatchdog(sessionId: cooldownSession)
                         }
@@ -175,6 +176,10 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             openCashDrawer(result: result)
         case "isConnected":
             isConnected(result: result)
+        case "getDiscoveryState":
+            getDiscoveryState(result: result)
+        case "abortDiscovery":
+            abortDiscovery(result: result)
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -184,8 +189,8 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private func discoverPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
         let attemptSession = nextSessionId()
         if discoveryState == .cleaningUp || discoveryState == .suspendedAfterUsbDisconnect {
-            print("DEBUG: Queueing LAN discovery until cleanup finishes (session=\(attemptSession))")
-            pendingDiscoveryWork = { [weak self] in self?.discoverPrinters(call: call, result: result) }
+            print("DEBUG: Deferring LAN discovery during cleanup/cooldown (session=\(attemptSession))")
+            result([])
             return
         }
         guard discoveryState == .idle else {
@@ -269,8 +274,8 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private func discoverBluetoothPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
         let attemptSession = nextSessionId()
         if discoveryState == .cleaningUp || discoveryState == .suspendedAfterUsbDisconnect {
-            print("DEBUG: Queueing Bluetooth discovery until cleanup finishes (session=\(attemptSession))")
-            pendingDiscoveryWork = { [weak self] in self?.discoverBluetoothPrinters(call: call, result: result) }
+            print("DEBUG: Deferring Bluetooth discovery during cleanup/cooldown (session=\(attemptSession))")
+            result([])
             return
         }
         guard discoveryState == .idle else {
@@ -518,8 +523,8 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private func discoverUsbPrinters(result: @escaping FlutterResult) {
         let attemptSession = nextSessionId()
         if discoveryState == .cleaningUp || discoveryState == .suspendedAfterUsbDisconnect {
-            print("DEBUG: Queueing USB discovery until cleanup finishes (session=\(attemptSession))")
-            pendingDiscoveryWork = { [weak self] in self?.discoverUsbPrinters(result: result) }
+            print("DEBUG: Deferring USB discovery during cleanup/cooldown (session=\(attemptSession))")
+            result([])
             return
         }
         guard discoveryState == .idle else {
@@ -576,5 +581,26 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private func debugResetStateIfStuck() {
         print("DEBUG: Manual state reset requested (current=\(discoveryState.rawValue))")
         discoveryState = .idle
+    }
+
+    // Expose discovery state & session info to Dart
+    private func getDiscoveryState(result: @escaping FlutterResult) {
+        let stateMap: [String: Any] = [
+            "state": discoveryState.rawValue,
+            "sessionId": discoverySessionId,
+            "usbWasConnectedThisSession": usbWasConnectedThisSession,
+            "pendingWorkQueued": pendingDiscoveryWork != nil,
+        ]
+        result(stateMap)
+    }
+
+    // Public abort invoked from Dart
+    private func abortDiscovery(result: @escaping FlutterResult) {
+        print("DEBUG: abortDiscovery called from Dart")
+        if discoveryState != .idle {
+            debugResetStateIfStuck()
+            pendingDiscoveryWork = nil
+        }
+        result(nil)
     }
 }

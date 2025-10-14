@@ -78,4 +78,14 @@ abstract class EpsonPrinterPlatform extends PlatformInterface {
   Future<bool> isConnected() {
     throw UnimplementedError('isConnected() has not been implemented.');
   }
+
+  /// Returns current native discovery state metadata
+  Future<Map<String, dynamic>> getDiscoveryState() {
+    throw UnimplementedError('getDiscoveryState() has not been implemented.');
+  }
+
+  /// Aborts any in-progress discovery and forces idle state
+  Future<void> abortDiscovery() {
+    throw UnimplementedError('abortDiscovery() has not been implemented.');
+  }
 }

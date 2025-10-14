@@ -67,6 +67,16 @@ class EpsonPrinter {
   static Future<bool> isConnected() {
     return _platform.isConnected();
   }
+
+  /// Returns current native discovery state (idle, discoveringLan, discoveringBluetooth, discoveringUsb, cleaningUp, suspendedAfterUsbDisconnect)
+  static Future<Map<String, dynamic>> getDiscoveryState() {
+    return _platform.getDiscoveryState();
+  }
+
+  /// Aborts an in-progress discovery and forces idle (use if UI detects freeze)
+  static Future<void> abortDiscovery() {
+    return _platform.abortDiscovery();
+  }
 }
 
 
