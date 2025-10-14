@@ -16,10 +16,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, strong, nullable) dispatch_block_t bluetoothTimeoutBlock; // Track Bluetooth timeout to cancel overlaps
 
 - (void)startDiscoveryWithFilter:(int32_t)filter completion:(void (^)(NSArray<NSDictionary *> *printers))completion;
-- (void)startBluetoothDiscoveryWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion;
+- (void)startBluetoothDiscoveryWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion; // Classic BT only (BLE disabled)
 - (void)findPairedBluetoothPrintersWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion;
 - (void)stopDiscovery;
 - (void)cancelBluetoothTimeout;
+- (void)forceDiscoveryCleanup;
+- (void)forceDiscoveryCleanupWithCompletion:(void (^)(void))completion; // Non-blocking cleanup with callback when fully done
 - (BOOL)connectToPrinter:(NSString *)target withSeries:(int32_t)series language:(int32_t)language timeout:(int32_t)timeout;
 - (void)disconnect;
 - (NSDictionary *)getPrinterStatus;

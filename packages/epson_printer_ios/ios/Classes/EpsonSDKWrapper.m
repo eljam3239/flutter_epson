@@ -26,6 +26,12 @@
     
     dispatch_async(dispatch_get_main_queue(), ^{
         @try {
+            // CRITICAL: Always stop any previous discovery first to ensure clean state
+            // This is especially important after printer disconnect where SDK state may be corrupted
+            NSLog(@"Ensuring no previous discovery is running...");
+            int32_t stopResult = [Epos2Discovery stop];
+            NSLog(@"Pre-discovery stop result: %d (EPOS2_ERR_PARAM_5=expected if nothing running)", stopResult);
+            
             [self.discoveredPrinters removeAllObjects];
             self.discoveryCompletionHandler = completion;
             self.isBluetoothDiscovery = NO; // LAN/TCP discovery - no early termination
@@ -72,6 +78,97 @@
         dispatch_block_cancel(self.bluetoothTimeoutBlock);
         self.bluetoothTimeoutBlock = nil;
     }
+}
+
+- (void)forceDiscoveryCleanup {
+    NSLog(@"Force cleaning Discovery SDK state (wrapper)...");
+    if ([NSThread isMainThread]) {
+        [self performDiscoveryCleanup];
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{ [self performDiscoveryCleanup]; });
+    }
+}
+
+- (void)forceDiscoveryCleanupWithCompletion:(void (^)(void))completion {
+    NSLog(@"Force cleaning Discovery SDK state (wrapper, with completion)...");
+    void (^safeCompletion)(void) = [completion copy];
+    if ([NSThread isMainThread]) {
+        [self performDiscoveryCleanupWithCompletion:safeCompletion];
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{ [self performDiscoveryCleanupWithCompletion:safeCompletion]; });
+    }
+}
+
+// Proper standalone non-blocking cleanup routine
+- (void)performDiscoveryCleanup {
+    static BOOL inProgress = NO;
+    if (inProgress) {
+        NSLog(@"performDiscoveryCleanup: already in progress - skipping");
+        return;
+    }
+    inProgress = YES;
+    NSLog(@"performDiscoveryCleanup: starting iterative stop sequence");
+    __block int attempt = 0;
+    __weak typeof(self) weakSelf = self;
+    __block void (^attemptStop)(void) = nil;
+    attemptStop = ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) { inProgress = NO; return; }
+        int32_t result = [Epos2Discovery stop];
+        NSLog(@"performDiscoveryCleanup: stop attempt %d => %d", attempt + 1, result);
+        attempt++;
+        if (attempt < 5) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), attemptStop);
+            return;
+        }
+        if (strongSelf.bluetoothTimeoutBlock) {
+            dispatch_block_cancel(strongSelf.bluetoothTimeoutBlock);
+            strongSelf.bluetoothTimeoutBlock = nil;
+        }
+        strongSelf.discoveryCompletionHandler = nil;
+        strongSelf.isBluetoothDiscovery = NO;
+        [strongSelf.discoveredPrinters removeAllObjects];
+        NSLog(@"performDiscoveryCleanup: complete; SDK should be clean");
+        inProgress = NO;
+    };
+    attemptStop();
+}
+
+// Completion-capable variant used by Swift to defer new discovery until fully clean
+- (void)performDiscoveryCleanupWithCompletion:(void (^)(void))completion {
+    static BOOL inProgress2 = NO;
+    if (inProgress2) {
+        NSLog(@"performDiscoveryCleanupWithCompletion: already in progress - will invoke completion after current run");
+        if (completion) { dispatch_async(dispatch_get_main_queue(), completion); }
+        return;
+    }
+    inProgress2 = YES;
+    NSLog(@"performDiscoveryCleanupWithCompletion: starting iterative stop sequence");
+    __block int attempt = 0;
+    __weak typeof(self) weakSelf = self;
+    __block void (^attemptStop)(void) = nil;
+    attemptStop = ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) { inProgress2 = NO; if (completion) completion(); return; }
+        int32_t result = [Epos2Discovery stop];
+        NSLog(@"performDiscoveryCleanupWithCompletion: stop attempt %d => %d", attempt + 1, result);
+        attempt++;
+        if (attempt < 5) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), attemptStop);
+            return;
+        }
+        if (strongSelf.bluetoothTimeoutBlock) {
+            dispatch_block_cancel(strongSelf.bluetoothTimeoutBlock);
+            strongSelf.bluetoothTimeoutBlock = nil;
+        }
+        strongSelf.discoveryCompletionHandler = nil;
+        strongSelf.isBluetoothDiscovery = NO;
+        [strongSelf.discoveredPrinters removeAllObjects];
+        NSLog(@"performDiscoveryCleanupWithCompletion: complete; SDK should be clean");
+        inProgress2 = NO;
+        if (completion) { completion(); }
+    };
+    attemptStop();
 }
 
 - (BOOL)connectToPrinter:(NSString *)target withSeries:(int32_t)series language:(int32_t)language timeout:(int32_t)timeout {
@@ -143,9 +240,16 @@
 
 - (void)disconnect {
     if (self.printer) {
+        NSLog(@"Disconnecting printer...");
+        
+        // Clear delegate first to prevent callbacks during cleanup
+        [self.printer setReceiveEventDelegate:nil];
+        
         [self.printer disconnect];
         [self.printer clearCommandBuffer];
         self.printer = nil;
+        
+        NSLog(@"Printer disconnected successfully");
     }
 }
 
@@ -299,128 +403,65 @@
         NSLog(@"Print job sent successfully");
         return YES;
     } else {
-        NSLog(@"Print job failed with error code: %d", result);
+        NSLog(@"Print failed with result=%d", result);
         return NO;
     }
+}
+
+// MARK: - Bluetooth Discovery (Classic only; BLE disabled)
+
+- (void)startBluetoothDiscoveryWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion {
+    if (!completion) { NSLog(@"ERROR: No completion handler for Bluetooth discovery"); return; }
+    [self cancelBluetoothTimeout];
+    self.discoveryCompletionHandler = completion;
+    [self startClassicBluetoothDiscovery];
+}
+
+- (void)startClassicBluetoothDiscovery {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSLog(@"Starting Classic Bluetooth discovery (BLE disabled)");
+        [Epos2Discovery stop];
+        self.isBluetoothDiscovery = YES;
+        [self.discoveredPrinters removeAllObjects];
+        Epos2FilterOption *filter = [[Epos2FilterOption alloc] init];
+        [filter setPortType:EPOS2_PORTTYPE_BLUETOOTH];
+        int32_t result = [Epos2Discovery start:filter delegate:self];
+        NSLog(@"BT discovery start result: %d (EPOS2_SUCCESS=0)", result);
+        if (result != EPOS2_SUCCESS) {
+            if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler(@[]); self.discoveryCompletionHandler = nil; }
+            return;
+        }
+        // Timeout for classic BT can be shorter (6s) since we early-stop after first device.
+        __weak typeof(self) weakSelf = self;
+        self.bluetoothTimeoutBlock = dispatch_block_create(0, ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            NSLog(@"BT discovery timeout reached, stopping discovery...");
+            int sret = EPOS2_SUCCESS;
+            do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
+            if (strongSelf.discoveryCompletionHandler) {
+                strongSelf.discoveryCompletionHandler([strongSelf.discoveredPrinters copy]);
+                strongSelf.discoveryCompletionHandler = nil;
+            }
+            strongSelf.bluetoothTimeoutBlock = nil;
+            strongSelf.isBluetoothDiscovery = NO;
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), self.bluetoothTimeoutBlock);
+    });
 }
 
 - (void)clearCommandBuffer {
-    if (self.printer) {
-        [self.printer clearCommandBuffer];
-    }
+    if (self.printer) { [self.printer clearCommandBuffer]; }
 }
 
 - (BOOL)openCashDrawer {
-    if (!self.printer) {
-        return NO;
-    }
-    
-    NSLog(@"DEBUG: openCashDrawer called");
-    // Clear any existing commands in the buffer first
-    [self.printer clearCommandBuffer];
-    
-    NSLog(@"DEBUG: Adding pulse command for cash drawer");
-    [self.printer addPulse:EPOS2_DRAWER_2PIN time:EPOS2_PULSE_100];
-    
-    NSLog(@"DEBUG: Sending cash drawer pulse...");
-    int32_t result = [self.printer sendData:EPOS2_PARAM_DEFAULT];
-    NSLog(@"DEBUG: Cash drawer result: %d (EPOS2_SUCCESS=0)", result);
-    
-    return result == EPOS2_SUCCESS;
-}
-
-- (void)startBluetoothDiscoveryWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion {
-    NSLog(@"startBluetoothDiscoveryWithCompletion called");
-    if (!completion) { NSLog(@"ERROR: No completion handler provided for Bluetooth discovery"); return; }
-    
-    // Use background QoS to avoid priority inversion warnings
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        @try {
-            // Ensure stop on main queue (Epson SDK requirement)
-            dispatch_async(dispatch_get_main_queue(), ^{
-                int stopRet = [Epos2Discovery stop];
-                if (stopRet == EPOS2_SUCCESS || stopRet == EPOS2_ERR_PARAM) {
-                    NSLog(@"Stopped any previous Bluetooth discovery (result: %d)", stopRet);
-                } else if (stopRet == EPOS2_ERR_ILLEGAL) {
-                    NSLog(@"No previous Bluetooth discovery to stop (result: %d)", stopRet);
-                } else {
-                    NSLog(@"Warning: Could not stop previous Bluetooth discovery (result: %d)", stopRet);
-                }
-            });
-            
-            [self.discoveredPrinters removeAllObjects];
-            self.discoveryCompletionHandler = completion;
-            self.isBluetoothDiscovery = YES; // Enable early termination for BT
-            
-            // Start with Classic BT (faster for already-paired devices, BLE often fails anyway)
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
-            });
-        } @catch (NSException *exception) {
-            NSLog(@"Exception in startBluetoothDiscovery: %@", exception);
-            completion(@[]);
-            self.discoveryCompletionHandler = nil;
-        }
-    });
-}
-
-- (void)tryBluetoothDiscovery:(int)portType withFallback:(BOOL)useFallback {
-    NSString *portTypeName = (portType == EPOS2_PORTTYPE_BLUETOOTH_LE) ? @"Bluetooth LE" : @"Classic Bluetooth";
-    NSLog(@"Trying %@ discovery...", portTypeName);
-    
-    // Cancel any pending Bluetooth timeout to prevent overlaps
-    if (self.bluetoothTimeoutBlock) {
-        NSLog(@"Cancelling previous Bluetooth timeout to prevent overlap");
-        dispatch_block_cancel(self.bluetoothTimeoutBlock);
-        self.bluetoothTimeoutBlock = nil;
-    }
-    
-    // Create filter option for the specified Bluetooth type
-    Epos2FilterOption *bluetoothFilter = [[Epos2FilterOption alloc] init];
-    if (!bluetoothFilter) {
-        NSLog(@"ERROR: Failed to create Bluetooth filter option");
-        if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler(@[]); self.discoveryCompletionHandler = nil; }
-        return;
-    }
-    [bluetoothFilter setDeviceType:EPOS2_TYPE_PRINTER];
-    [bluetoothFilter setPortType:portType];
-    
-    int32_t result = [Epos2Discovery start:bluetoothFilter delegate:self];
-    NSLog(@"%@ discovery start result: %d (EPOS2_SUCCESS=0)", portTypeName, result);
-    
-    if (result != EPOS2_SUCCESS) {
-        if (useFallback && portType == EPOS2_PORTTYPE_BLUETOOTH_LE) {
-            NSLog(@"Bluetooth LE failed, trying Classic Bluetooth...");
-            [self tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
-            return;
-        }
-        if (self.discoveryCompletionHandler) { self.discoveryCompletionHandler(@[]); self.discoveryCompletionHandler = nil; }
-        return;
-    }
-    
-    // Reduce timeout to 8 seconds (faster UX, Classic BT finds devices quickly if paired)
-    __weak typeof(self) weakSelf = self;
-    self.bluetoothTimeoutBlock = dispatch_block_create(0, ^{
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) return;
-        
-        NSLog(@"%@ discovery timeout reached, stopping discovery...", portTypeName);
-        int sret = EPOS2_SUCCESS;
-        do { sret = [Epos2Discovery stop]; } while (sret == EPOS2_ERR_PROCESSING);
-        NSUInteger count = strongSelf.discoveredPrinters.count;
-        if (count > 0 || !useFallback || portType == EPOS2_PORTTYPE_BLUETOOTH) {
-            if (strongSelf.discoveryCompletionHandler) { 
-                strongSelf.discoveryCompletionHandler([strongSelf.discoveredPrinters copy]); 
-                strongSelf.discoveryCompletionHandler = nil; 
-            }
-        } else {
-            NSLog(@"No printers found with Bluetooth LE, trying Classic Bluetooth...");
-            [strongSelf tryBluetoothDiscovery:EPOS2_PORTTYPE_BLUETOOTH withFallback:NO];
-        }
-        strongSelf.bluetoothTimeoutBlock = nil;
-    });
-    
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), self.bluetoothTimeoutBlock);
+    if (!self.printer) { NSLog(@"openCashDrawer: no printer"); return NO; }
+    // EPOS2_DRAWER_1 does not exist; using EPOS2_DRAWER_2PIN as default (most common)
+    int addRes = [self.printer addPulse:EPOS2_DRAWER_2PIN time:EPOS2_PULSE_100];
+    if (addRes != EPOS2_SUCCESS) { NSLog(@"addPulse failed: %d", addRes); return NO; }
+    int sendRes = [self.printer sendData:EPOS2_PARAM_DEFAULT];
+    NSLog(@"openCashDrawer sendData result=%d", sendRes);
+    return sendRes == EPOS2_SUCCESS;
 }
 
 - (void)findPairedBluetoothPrintersWithCompletion:(void (^)(NSArray<NSDictionary *> *printers))completion {
@@ -564,6 +605,7 @@
                 self.discoveryCompletionHandler([self.discoveredPrinters copy]);
                 self.discoveryCompletionHandler = nil;
             }
+            self.isBluetoothDiscovery = NO;
         });
     }
 }

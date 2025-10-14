@@ -14,10 +14,46 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private var currentBluetoothDeviceNames: Set<String> = [] // Track CURRENT Bluetooth-connected devices
     private var usbWasConnectedThisSession: Bool = false // Track if USB was ever connected (BT hardware turns off on iOS)
     private var connectedAccessories: Set<String> = [] // Track currently connected EAAccessory devices
+    // Discovery coordination
+    private enum DiscoveryState: String { case idle, discoveringLan, discoveringBluetooth, discoveringUsb, cleaningUp, suspendedAfterUsbDisconnect }
+    private var discoveryState: DiscoveryState = .idle
+    private var discoverySessionId: UInt64 = 0
+    private let sdkQueue = DispatchQueue(label: "epson.sdk.serial", qos: .userInitiated) // elevated QoS to reduce inversion risk
+    private var pendingDiscoveryWork: (() -> Void)?
+    private var watchdogTimers: [UInt64: DispatchWorkItem] = [:]
+    private let watchdogTimeoutSeconds: TimeInterval = 12.0 // safety timeout to auto-reset state
+
+    private func nextSessionId() -> UInt64 { discoverySessionId &+= 1; return discoverySessionId }
+    private func setState(_ new: DiscoveryState, sessionId: UInt64) {
+        print("DEBUG: State transition: \(discoveryState.rawValue) -> \(new.rawValue) (session=\(sessionId))")
+        discoveryState = new
+    }
+    private func startWatchdog(sessionId: UInt64, label: String) {
+        let item = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            if self.discoverySessionId == sessionId && self.discoveryState != .idle {
+                print("DEBUG: Watchdog fired for session \(sessionId) [\(label)] - forcing state reset to idle")
+                self.discoveryState = .idle
+            }
+        }
+        watchdogTimers[sessionId]?.cancel()
+        watchdogTimers[sessionId] = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + watchdogTimeoutSeconds, execute: item)
+    }
+    private func clearWatchdog(sessionId: UInt64) { watchdogTimers[sessionId]?.cancel(); watchdogTimers.removeValue(forKey: sessionId) }
     
     override init() {
         epsonWrapper = EpsonSDKWrapper()
         super.init()
+        
+        // CRITICAL: Populate connectedAccessories with devices that are ALREADY connected at app launch
+        // This prevents treating Bluetooth devices as "NEW" (USB) connections
+        for accessory in EAAccessoryManager.shared().connectedAccessories {
+            if accessory.protocolStrings.contains("com.epson.escpos") {
+                connectedAccessories.insert(accessory.name)
+                print("DEBUG: Found already-connected accessory at init: \(accessory.name)")
+            }
+        }
         
         // Register for EAAccessory connect/disconnect notifications for logging
         NotificationCenter.default.addObserver(
@@ -61,10 +97,42 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     }
     
     @objc private func accessoryDidDisconnect(_ notification: Notification) {
-        if let accessory = notification.userInfo?[EAAccessoryKey] as? EAAccessory {
-            print("DEBUG: EAAccessory disconnected: \(accessory.name)")
-            connectedAccessories.remove(accessory.name)
+        guard let accessory = notification.userInfo?[EAAccessoryKey] as? EAAccessory else { return }
+        print("DEBUG: EAAccessory disconnected: \(accessory.name)")
+
+        // When USB cable unplugged after a session with USB, perform cleanup then cooldown
+        if accessory.name.contains("TM-") && usbWasConnectedThisSession {
+            print("DEBUG: USB cable unplugged - scheduling non-blocking cleanup")
+            let session = nextSessionId()
+            setState(.cleaningUp, sessionId: session)
+            startWatchdog(sessionId: session, label: "usb_cleanup")
+            sdkQueue.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self = self else { return }
+                print("DEBUG: Performing serial cleanup (session=\(session))")
+                self.epsonWrapper.forceDiscoveryCleanup(completion: { [weak self] in
+                    guard let self = self else { return }
+                    self.clearWatchdog(sessionId: session)
+                    // Only transition if still cleaning up for this session
+                    if self.discoveryState == .cleaningUp && self.discoverySessionId == session {
+                        self.discoveryState = .suspendedAfterUsbDisconnect
+                        print("DEBUG: Cleanup complete -> suspendedAfterUsbDisconnect (cooldown) (session=\(session))")
+                        let cooldownSession = self.nextSessionId()
+                        self.startWatchdog(sessionId: cooldownSession, label: "post_usb_cooldown")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                            guard let self = self else { return }
+                            if self.discoveryState == .suspendedAfterUsbDisconnect {
+                                self.discoveryState = .idle
+                                print("DEBUG: Cooldown ended -> idle (session=\(cooldownSession))")
+                                if let work = self.pendingDiscoveryWork { self.pendingDiscoveryWork = nil; work() }
+                            }
+                            self.clearWatchdog(sessionId: cooldownSession)
+                        }
+                    }
+                })
+            }
         }
+
+        connectedAccessories.remove(accessory.name)
     }
 
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -80,15 +148,11 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
         case "discoverBluetoothPrinters":
             // Clear previous Bluetooth tracking before new discovery
             currentBluetoothDeviceNames.removeAll()
-            
-            // Debug: list currently connected ExternalAccessory devices and protocol strings
             let accessories = EAAccessoryManager.shared().connectedAccessories
             if accessories.isEmpty {
                 print("EAAccessory: No connected accessories found.")
             } else {
-                for acc in accessories {
-                    print("EAAccessory connected: name=\(acc.name), manufacturer=\(acc.manufacturer), model=\(acc.modelNumber), serial=\(acc.serialNumber), protocols=\(acc.protocolStrings)")
-                }
+                for acc in accessories { print("EAAccessory connected: name=\(acc.name), manufacturer=\(acc.manufacturer), model=\(acc.modelNumber), serial=\(acc.serialNumber), protocols=\(acc.protocolStrings)") }
             }
             discoverBluetoothPrinters(call: call, result: result)
         case "discoverUsbPrinters":
@@ -116,69 +180,72 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
         }
     }
 
+    // Updated LAN discovery with state machine & watchdog
     private func discoverPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        print("DEBUG: Starting Epson printer discovery...")
-        
-        // Start with TCP discovery (most common for network printers)
+        let attemptSession = nextSessionId()
+        if discoveryState == .cleaningUp || discoveryState == .suspendedAfterUsbDisconnect {
+            print("DEBUG: Queueing LAN discovery until cleanup finishes (session=\(attemptSession))")
+            pendingDiscoveryWork = { [weak self] in self?.discoverPrinters(call: call, result: result) }
+            return
+        }
+        guard discoveryState == .idle else {
+            print("DEBUG: Ignoring LAN discovery request; current state=\(discoveryState.rawValue)")
+            result([])
+            return
+        }
+        setState(.discoveringLan, sessionId: attemptSession)
+        startWatchdog(sessionId: attemptSession, label: "lan")
+        print("DEBUG: Starting Epson printer discovery (session=\(attemptSession))...")
         let filterOption: Int32 = 1 // EPOS2_PORTTYPE_TCP
-        
         print("DEBUG: Using TCP filter option: \(filterOption)")
-        
-        // Add error handling wrapper
-        do {
-            epsonWrapper.startDiscovery(withFilter: filterOption) { [weak self] printers in
-                print("DEBUG: Discovery callback received with \(printers.count) printers")
-                
-                // Deduplicate: if both TCP: and TCPS: exist for same MAC, keep only TCP:
-                var seenMacs: [String: String] = [:] // MAC -> target
-                var printerStrings: [String] = []
-                
-                for printer in printers {
-                    guard let target = printer["target"] as? String,
-                          let deviceName = printer["deviceName"] as? String else {
-                        print("DEBUG: Skipping printer with invalid data: \(printer)")
-                        continue
-                    }
-                    
-                    // Extract MAC address from target (e.g., "TCP:A4:D7:3C:AA:CA:01" or "TCPS:A4:D7:3C:AA:CA:01[...]")
-                    let mac = self?.extractMacAddress(from: target) ?? ""
-                    
-                    if !mac.isEmpty {
-                        if let existingTarget = seenMacs[mac] {
-                            // Prefer TCP over TCPS (TCP is standard, TCPS is secure/paired variant)
-                            if target.starts(with: "TCP:") && existingTarget.starts(with: "TCPS:") {
-                                print("DEBUG: Replacing TCPS with TCP for MAC \(mac)")
-                                if let index = printerStrings.firstIndex(where: { $0.starts(with: existingTarget) }) {
-                                    printerStrings.remove(at: index)
+        sdkQueue.async { [weak self] in
+            guard let self = self else { return }
+            do {
+                self.epsonWrapper.startDiscovery(withFilter: filterOption) { [weak self] printers in
+                    guard let self = self else { return }
+                    print("DEBUG: Discovery callback received with \(printers.count) printers (session=\(attemptSession))")
+                    var seenMacs: [String: String] = [:]
+                    var printerStrings: [String] = []
+                    for printer in printers {
+                        guard let target = printer["target"] as? String,
+                              let deviceName = printer["deviceName"] as? String else {
+                            print("DEBUG: Skipping printer with invalid data: \(printer)")
+                            continue
+                        }
+                        let mac = self.extractMacAddress(from: target)
+                        if !mac.isEmpty {
+                            if let existing = seenMacs[mac] {
+                                if target.starts(with: "TCP:") && existing.starts(with: "TCPS:") {
+                                    if let idx = printerStrings.firstIndex(where: { $0.starts(with: existing) }) { printerStrings.remove(at: idx) }
+                                    seenMacs[mac] = target
+                                    printerStrings.append("\(target):\(deviceName)")
+                                } else if target.starts(with: "TCPS:") && existing.starts(with: "TCP:") {
+                                    print("DEBUG: Skipping TCPS duplicate, already have TCP for MAC \(mac)")
+                                    continue
                                 }
+                            } else {
                                 seenMacs[mac] = target
                                 printerStrings.append("\(target):\(deviceName)")
-                            } else if target.starts(with: "TCPS:") && existingTarget.starts(with: "TCP:") {
-                                print("DEBUG: Skipping TCPS duplicate, already have TCP for MAC \(mac)")
-                                continue
                             }
                         } else {
-                            seenMacs[mac] = target
                             printerStrings.append("\(target):\(deviceName)")
                         }
-                    } else {
-                        // No MAC, add as-is
-                        printerStrings.append("\(target):\(deviceName)")
+                        print("DEBUG: Found printer: \(target):\(deviceName)")
                     }
-                    
-                    print("DEBUG: Found printer: \(target):\(deviceName)")
+                    print("DEBUG: Discovery completed. Found \(printerStrings.count) unique printers: \(printerStrings) (session=\(attemptSession))")
+                    DispatchQueue.main.async {
+                        self.clearWatchdog(sessionId: attemptSession)
+                        if self.discoverySessionId == attemptSession { self.discoveryState = .idle }
+                        result(printerStrings)
+                    }
                 }
-                
-                print("DEBUG: Discovery completed. Found \(printerStrings.count) unique printers: \(printerStrings)")
-                
+            } catch {
+                print("DEBUG: Discovery threw error: \(error) (session=\(attemptSession))")
                 DispatchQueue.main.async {
-                    result(printerStrings)
+                    self.clearWatchdog(sessionId: attemptSession)
+                    if self.discoverySessionId == attemptSession { self.discoveryState = .idle }
+                    result([])
                 }
-            }
-        } catch {
-            print("DEBUG: Discovery threw error: \(error)")
-            DispatchQueue.main.async {
-                result([])
             }
         }
     }
@@ -200,7 +267,20 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     }
     
     private func discoverBluetoothPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        print("DEBUG: Starting Bluetooth printer discovery...")
+        let attemptSession = nextSessionId()
+        if discoveryState == .cleaningUp || discoveryState == .suspendedAfterUsbDisconnect {
+            print("DEBUG: Queueing Bluetooth discovery until cleanup finishes (session=\(attemptSession))")
+            pendingDiscoveryWork = { [weak self] in self?.discoverBluetoothPrinters(call: call, result: result) }
+            return
+        }
+        guard discoveryState == .idle else {
+            print("DEBUG: Ignoring Bluetooth discovery request; state=\(discoveryState.rawValue)")
+            result([])
+            return
+        }
+        setState(.discoveringBluetooth, sessionId: attemptSession)
+        startWatchdog(sessionId: attemptSession, label: "bt")
+        print("DEBUG: Starting Bluetooth printer discovery (session=\(attemptSession))...")
         
         // iOS hardware limitation: When USB cable connects, BT radio on printer physically turns off
         // and cannot re-enable until manual reconnect in iOS Settings + app restart
@@ -209,7 +289,10 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             print("DEBUG: iOS limitation: Printer's BT hardware disabled when USB connected")
             print("DEBUG: User must manually reconnect in iOS Settings after unplugging USB")
             currentBluetoothDeviceNames.removeAll()
-            DispatchQueue.main.async { result([]) }
+            DispatchQueue.main.async { [weak self] in
+                if let self = self { self.clearWatchdog(sessionId: attemptSession); if self.discoverySessionId == attemptSession { self.discoveryState = .idle } }
+                result([])
+            }
             return
         }
         
@@ -219,8 +302,8 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
         // Optimized: single discovery pass (Classic BT finds paired devices quickly)
         do {
             epsonWrapper.startBluetoothDiscovery { [weak self] printers in
-                print("DEBUG: Bluetooth discovery callback received with \(printers.count) printers")
-                
+                guard let self = self else { return }
+                print("DEBUG: Bluetooth discovery callback received with \(printers.count) printers (session=\(attemptSession))")
                 let printerStrings = printers.compactMap { printer -> String? in
                     guard let target = printer["target"] as? String,
                           let deviceName = printer["deviceName"] as? String else {
@@ -228,22 +311,22 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
                         return nil
                     }
                     print("DEBUG: Found Bluetooth printer - Target: \(target), Name: \(deviceName)")
-                    
-                    // Track device name for USB filtering ONLY if it's actually Bluetooth
-                    // TCPS: targets are local USB connections masquerading as network, not Bluetooth
-                    if target.starts(with: "BT:") || target.starts(with: "BLE:") {
-                        self?.currentBluetoothDeviceNames.insert(deviceName)
-                    }
-                    
+                    if target.starts(with: "BT:") || target.starts(with: "BLE:") { self.currentBluetoothDeviceNames.insert(deviceName) }
                     return "\(target):\(deviceName)"
                 }
-                
-                print("DEBUG: Bluetooth discovery found \(printerStrings.count) printers: \(printerStrings)")
-                DispatchQueue.main.async { result(printerStrings) }
+                print("DEBUG: Bluetooth discovery found \(printerStrings.count) printers: \(printerStrings) (session=\(attemptSession))")
+                DispatchQueue.main.async {
+                    self.clearWatchdog(sessionId: attemptSession)
+                    if self.discoverySessionId == attemptSession { self.discoveryState = .idle }
+                    result(printerStrings)
+                }
             }
         } catch {
-            print("DEBUG: Bluetooth discovery threw error: \(error)")
-            DispatchQueue.main.async { result([]) }
+            print("DEBUG: Bluetooth discovery threw error: \(error) (session=\(attemptSession))")
+            DispatchQueue.main.async { [weak self] in
+                if let self = self { self.clearWatchdog(sessionId: attemptSession); if self.discoverySessionId == attemptSession { self.discoveryState = .idle } }
+                result([])
+            }
         }
     }
     
@@ -433,7 +516,20 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     }
     
     private func discoverUsbPrinters(result: @escaping FlutterResult) {
-        print("DEBUG: Starting USB printer discovery...")
+        let attemptSession = nextSessionId()
+        if discoveryState == .cleaningUp || discoveryState == .suspendedAfterUsbDisconnect {
+            print("DEBUG: Queueing USB discovery until cleanup finishes (session=\(attemptSession))")
+            pendingDiscoveryWork = { [weak self] in self?.discoverUsbPrinters(result: result) }
+            return
+        }
+        guard discoveryState == .idle else {
+            print("DEBUG: Ignoring USB discovery request; state=\(discoveryState.rawValue)")
+            result([])
+            return
+        }
+        setState(.discoveringUsb, sessionId: attemptSession)
+        startWatchdog(sessionId: attemptSession, label: "usb")
+        print("DEBUG: Starting USB printer discovery (session=\(attemptSession))...")
         
         // IMPORTANT: Skip Epson SDK entirely for USB discovery
         // The SDK's USB discovery internally triggers BLE finder which causes threading issues
@@ -464,11 +560,21 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
                 return "USB::\(acc.name)"
             }
             
-            print("DEBUG: USB discovery completed. Found \(usbPrinters.count) USB printers: \(usbPrinters)")
+            print("DEBUG: USB discovery completed. Found \(usbPrinters.count) USB printers: \(usbPrinters) (session=\(attemptSession))")
+            clearWatchdog(sessionId: attemptSession)
+            if discoverySessionId == attemptSession { discoveryState = .idle }
             result(usbPrinters)
         } else {
-            print("DEBUG: No Epson EAAccessory devices found")
+            print("DEBUG: No Epson EAAccessory devices found (session=\(attemptSession))")
+            clearWatchdog(sessionId: attemptSession)
+            if discoverySessionId == attemptSession { discoveryState = .idle }
             result([])
         }
+    }
+
+    // Manual reset callable from Dart if UI detects prolonged freeze (optional future method exposure)
+    private func debugResetStateIfStuck() {
+        print("DEBUG: Manual state reset requested (current=\(discoveryState.rawValue))")
+        discoveryState = .idle
     }
 }
