@@ -2,6 +2,8 @@ package com.example.epson_printer_android;
 
 import android.app.Activity;
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.hardware.usb.UsbDevice;
@@ -43,24 +45,41 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
   // Connection state
   private Printer mPrinter;
 
+  // Discovery/state machine metadata (parity with iOS)
+  private final Object stateLock = new Object();
+  private String discoveryState = "idle"; // idle | discoveringLan | discoveringBluetooth | discoveringUsb | cleaningUp | suspendedAfterUsbDisconnect
+  private int discoverySessionId = 0;
+  private boolean usbWasConnectedThisSession = false;
+  private boolean pendingWorkQueued = false;
+  private long suspendedUntilMs = 0L;
+  private Handler mainHandler;
+
   @Override
   public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
     channel = new MethodChannel(flutterPluginBinding.getBinaryMessenger(), "epson_printer");
     channel.setMethodCallHandler(this);
     context = flutterPluginBinding.getApplicationContext();
+    mainHandler = new Handler(Looper.getMainLooper());
   }
 
   @Override
   public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
     switch (call.method) {
       case "discoverPrinters":
-        discoverLanPrinters(result);
+        if (isSuspended()) { result.success(java.util.Collections.emptyList()); } else { discoverLanPrinters(result); }
         break;
       case "discoverBluetoothPrinters":
-        discoverBluetoothPrinters(result);
+        if (isSuspended()) { result.success(java.util.Collections.emptyList()); } else { discoverBluetoothPrinters(result); }
         break;
       case "discoverUsbPrinters":
-        discoverUsbPrinters(result);
+        if (isSuspended()) { result.success(java.util.Collections.emptyList()); } else { discoverUsbPrinters(result); }
+        break;
+      case "discoverAllPrinters":
+        if (isSuspended()) {
+          result.success(java.util.Collections.emptyList());
+        } else {
+          discoverAllPrinters(result);
+        }
         break;
       case "pairBluetoothDevice":
         pairBluetoothDevice(result);
@@ -87,9 +106,307 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
       case "isConnected":
         result.success(mPrinter != null);
         break;
+      case "getDiscoveryState": {
+        java.util.Map<String, Object> st = new java.util.HashMap<>();
+        synchronized (stateLock) {
+          st.put("state", discoveryState);
+          st.put("sessionId", discoverySessionId);
+          st.put("usbWasConnectedThisSession", usbWasConnectedThisSession);
+          st.put("pendingWorkQueued", pendingWorkQueued);
+        }
+        result.success(st);
+        break;
+      }
+      case "abortDiscovery": {
+        abortDiscovery(result);
+        break;
+      }
       default:
         result.notImplemented();
     }
+  }
+
+  // --- State helpers ---
+  private void setState(String s) {
+    synchronized (stateLock) {
+      discoveryState = s;
+    }
+  }
+
+  private boolean isSuspended() {
+    synchronized (stateLock) {
+      long now = System.currentTimeMillis();
+      if ("cleaningUp".equals(discoveryState)) return true;
+      if ("suspendedAfterUsbDisconnect".equals(discoveryState) && now < suspendedUntilMs) return true;
+      if (now < suspendedUntilMs) return true;
+    }
+    return false;
+  }
+
+  private void suspendShort(long millis) {
+    synchronized (stateLock) {
+      discoveryState = "suspendedAfterUsbDisconnect";
+      suspendedUntilMs = System.currentTimeMillis() + Math.max(0, millis);
+    }
+    mainHandler.postDelayed(() -> {
+      synchronized (stateLock) {
+        if (System.currentTimeMillis() >= suspendedUntilMs && "suspendedAfterUsbDisconnect".equals(discoveryState)) {
+          discoveryState = "idle";
+        }
+      }
+    }, Math.max(0, millis) + 50);
+  }
+
+  private void cleanupDiscoveryAsync(@NonNull Runnable onDone) {
+    setState("cleaningUp");
+    new Thread(() -> {
+      for (int i = 0; i < 20; i++) {
+        try {
+          Discovery.stop();
+          break;
+        } catch (Epos2Exception e) {
+          if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) {
+            break;
+          }
+          try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+        } catch (Throwable t) {
+          break;
+        }
+      }
+      try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+      mainHandler.post(() -> {
+        setState("idle");
+        onDone.run();
+      });
+    }).start();
+  }
+
+  private void abortDiscovery(@NonNull Result result) {
+    cleanupDiscoveryAsync(() -> {
+      synchronized (stateLock) {
+        discoverySessionId++;
+      }
+      suspendShort(250);
+      result.success(null);
+    });
+  }
+
+  // --- Orchestrated unified discovery ---
+  private interface ListCallback { void onResult(java.util.List<String> list); }
+
+  private String stripName(String entry) {
+    if (entry == null) return null;
+    int idx = entry.lastIndexOf(":");
+    if (idx > 0) return entry.substring(0, idx);
+    return entry;
+  }
+
+  private void discoverAllPrinters(@NonNull Result result) {
+    synchronized (stateLock) { discoverySessionId++; }
+    final java.util.Set<String> dedup = new java.util.HashSet<>();
+    final java.util.List<String> agg = new java.util.ArrayList<>();
+
+    setState("discoveringLan");
+    runLanDiscovery(5000, lan -> {
+      for (String s : lan) {
+        String key = stripName(s);
+        if (!dedup.contains(key)) { dedup.add(key); agg.add(s); }
+      }
+
+      // If USB is attached, prioritize USB path next
+      if (isEpsonUsbAttached()) {
+        setState("discoveringUsb");
+        runUsbDiscovery(4000, usb -> {
+          for (String s : usb) {
+            String key = stripName(s);
+            if (!dedup.contains(key)) { dedup.add(key); agg.add(s); }
+          }
+          setState("idle");
+          result.success(new java.util.ArrayList<>(agg));
+        });
+        return;
+      }
+
+      setState("discoveringBluetooth");
+      runBtDiscovery(4000, bt -> {
+        for (String s : bt) {
+          String key = stripName(s);
+          if (!dedup.contains(key)) { dedup.add(key); agg.add(s); }
+        }
+        setState("discoveringUsb");
+        runUsbDiscovery(4000, usb -> {
+          for (String s : usb) {
+            String key = stripName(s);
+            if (!dedup.contains(key)) { dedup.add(key); agg.add(s); }
+          }
+          setState("idle");
+          result.success(new java.util.ArrayList<>(agg));
+        });
+      });
+    });
+  }
+
+  // Internal helpers that mirror existing public methods but return via callback
+  private void runLanDiscovery(int timeoutMs, @NonNull ListCallback cb) {
+    // Stop any existing discovery
+    for (int i = 0; i < 10; i++) {
+      try { Discovery.stop(); break; }
+      catch (Epos2Exception e) { if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) break; try { Thread.sleep(50);} catch (InterruptedException ignored) {} }
+      catch (Throwable t) { break; }
+    }
+
+    final java.util.List<String> found = new java.util.ArrayList<>();
+    final FilterOption filter = new FilterOption();
+    filter.setDeviceType(Discovery.TYPE_PRINTER);
+    filter.setPortType(Discovery.PORTTYPE_TCP);
+    filter.setEpsonFilter(Discovery.FILTER_NAME);
+
+    final DiscoveryListener listener = new DiscoveryListener() {
+      @Override public void onDiscovery(final DeviceInfo deviceInfo) {
+        synchronized (found) {
+          String target = deviceInfo.getTarget();
+          String ip = deviceInfo.getIpAddress();
+          String name = deviceInfo.getDeviceName();
+          String prefixTarget;
+          if (target != null && target.startsWith("TCP:")) {
+            prefixTarget = target;
+          } else if (ip != null && !ip.isEmpty()) {
+            prefixTarget = "TCP:" + ip;
+          } else if (target != null && !target.isEmpty()) {
+            prefixTarget = target.startsWith("TCP:") ? target : ("TCP:" + target);
+          } else {
+            return;
+          }
+          String entry = prefixTarget + ":" + (name != null ? name : "Printer");
+          if (!found.contains(entry)) found.add(entry);
+        }
+      }
+    };
+
+    boolean started = false;
+    try { Discovery.start(context, filter, listener); started = true; }
+    catch (Exception e) { /* ignore */ }
+
+    final boolean startedFinal = started;
+    mainHandler.postDelayed(() -> {
+      if (startedFinal) {
+        while (true) {
+          try { Discovery.stop(); break; }
+          catch (Epos2Exception e) { if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) break; }
+          catch (Throwable t) { break; }
+        }
+      }
+      synchronized (found) { cb.onResult(new java.util.ArrayList<>(found)); }
+    }, Math.max(500, timeoutMs));
+  }
+
+  private void runBtDiscovery(int timeoutMs, @NonNull ListCallback cb) {
+    // Stop any existing discovery
+    for (int i = 0; i < 10; i++) {
+      try { Discovery.stop(); break; }
+      catch (Epos2Exception e) { if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) break; try { Thread.sleep(50);} catch (InterruptedException ignored) {} }
+      catch (Throwable t) { break; }
+    }
+
+    final java.util.List<String> found = new java.util.ArrayList<>();
+    // Seed with bonded
+    for (String entry : getBondedBtPrinters()) { if (!found.contains(entry)) found.add(entry); }
+
+    final FilterOption filter = new FilterOption();
+    filter.setDeviceType(Discovery.TYPE_PRINTER);
+    filter.setPortType(Discovery.PORTTYPE_BLUETOOTH); // Classic only (BLE not used)
+    filter.setEpsonFilter(Discovery.FILTER_NAME);
+
+    final DiscoveryListener listener = new DiscoveryListener() {
+      @Override public void onDiscovery(final DeviceInfo deviceInfo) {
+        synchronized (found) {
+          String target = deviceInfo.getTarget();
+          String name = deviceInfo.getDeviceName();
+          String btAddr = deviceInfo.getBdAddress();
+          String prefixTarget = null;
+          if (target != null && target.startsWith("BT:")) {
+            prefixTarget = target;
+          } else if (btAddr != null && !btAddr.isEmpty()) {
+            prefixTarget = "BT:" + btAddr;
+          } else if (target != null && !target.isEmpty()) {
+            prefixTarget = target.startsWith("BT:") ? target : ("BT:" + target);
+          }
+          if (prefixTarget == null) return;
+          String entry = prefixTarget + ":" + (name != null ? name : "Printer");
+          if (!found.contains(entry)) found.add(entry);
+        }
+      }
+    };
+
+    boolean started = false;
+    try { Discovery.start(context, filter, listener); started = true; }
+    catch (Exception e) { /* ignore */ }
+
+    final boolean startedFinal = started;
+    mainHandler.postDelayed(() -> {
+      if (startedFinal) {
+        while (true) {
+          try { Discovery.stop(); break; }
+          catch (Epos2Exception e) { if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) break; }
+          catch (Throwable t) { break; }
+        }
+      }
+      synchronized (found) { cb.onResult(new java.util.ArrayList<>(found)); }
+    }, Math.max(500, timeoutMs));
+  }
+
+  private void runUsbDiscovery(int timeoutMs, @NonNull ListCallback cb) {
+    // Stop any existing discovery
+    for (int i = 0; i < 10; i++) {
+      try { Discovery.stop(); break; }
+      catch (Epos2Exception e) { if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) break; try { Thread.sleep(50);} catch (InterruptedException ignored) {} }
+      catch (Throwable t) { break; }
+    }
+
+    final java.util.List<String> found = new java.util.ArrayList<>();
+
+    final FilterOption filter = new FilterOption();
+    filter.setDeviceType(Discovery.TYPE_PRINTER);
+    filter.setPortType(Discovery.PORTTYPE_USB);
+    filter.setEpsonFilter(Discovery.FILTER_NAME);
+
+    final DiscoveryListener listener = new DiscoveryListener() {
+      @Override public void onDiscovery(final DeviceInfo deviceInfo) {
+        synchronized (found) {
+          String target = deviceInfo.getTarget();
+          String name = deviceInfo.getDeviceName();
+          if (target == null || target.isEmpty()) return;
+          if (!target.startsWith("USB:")) target = "USB:" + target;
+          String entry = target + ":" + (name != null ? name : "USB Printer");
+          if (!found.contains(entry)) found.add(entry);
+        }
+      }
+    };
+
+    boolean started = false;
+    try { Discovery.start(context, filter, listener); started = true; }
+    catch (Exception e) { /* ignore */ }
+
+    final boolean startedFinal = started;
+    mainHandler.postDelayed(() -> {
+      if (startedFinal) {
+        while (true) {
+          try { Discovery.stop(); break; }
+          catch (Epos2Exception e) { if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) break; }
+          catch (Throwable t) { break; }
+        }
+      }
+      // Post USB extra cleanup to avoid internal discovery overlap
+      mainHandler.postDelayed(() -> {
+        for (int i = 0; i < 10; i++) {
+          try { Discovery.stop(); break; }
+          catch (Epos2Exception e) { if (e.getErrorStatus() != Epos2Exception.ERR_PROCESSING) break; }
+          catch (Throwable t) { break; }
+        }
+      }, 500);
+
+      synchronized (found) { cb.onResult(new java.util.ArrayList<>(found)); }
+    }, Math.max(500, timeoutMs));
   }
 
   private void discoverLanPrinters(@NonNull Result result) {
@@ -362,6 +679,11 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
       // Connect with explicit timeout
       mPrinter.connect(target, timeout);
 
+      // Mark session USB if applicable
+      if (target != null && target.startsWith("USB:")) {
+        synchronized (stateLock) { usbWasConnectedThisSession = true; }
+      }
+
       result.success(null);
     } catch (Epos2Exception e) {
       safeDisposePrinter();
@@ -436,6 +758,9 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         Thread.sleep(300);
       } catch (InterruptedException ignored) {}
       
+      // Enter short suspension window to prevent immediate discovery restarts during USB stack settle
+      suspendShort(800);
+
       android.util.Log.d("EpsonPrinter", "Post-disconnect cleanup complete");
       result.success(null);
     } catch (Exception e) {
