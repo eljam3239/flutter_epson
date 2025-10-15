@@ -12,6 +12,7 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private var printerSeries: Int32 = 29 // EPOS2_TM_M30III (based on the discovery result)
     private var printerLang: Int32 = 0 // EPOS2_MODEL_ANK
     private var currentBluetoothDeviceNames: Set<String> = [] // Track CURRENT Bluetooth-connected devices
+    private var knownBluetoothAccessoryNames: Set<String> = [] // Track EAAccessory names that are likely Bluetooth
     private var usbWasConnectedThisSession: Bool = false // Track if USB was ever connected (BT hardware turns off on iOS)
     private var connectedAccessories: Set<String> = [] // Track currently connected EAAccessory devices
     // Discovery coordination
@@ -52,6 +53,10 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             if accessory.protocolStrings.contains("com.epson.escpos") {
                 connectedAccessories.insert(accessory.name)
                 print("DEBUG: Found already-connected accessory at init: \(accessory.name)")
+                if isLikelyBluetoothAccessoryName(accessory.name) {
+                    knownBluetoothAccessoryNames.insert(accessory.name)
+                    print("DEBUG: Classified accessory as Bluetooth by name pattern at init: \(accessory.name)")
+                }
             }
         }
         
@@ -83,13 +88,18 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             // If this device is NOT already in our connected set, it means a cable was just plugged in
             // (Bluetooth devices are already connected at app launch)
             if !connectedAccessories.contains(accessory.name) {
-                print("DEBUG: NEW accessory connection detected - USB cable was just plugged in!")
-                print("DEBUG: Bluetooth hardware on printer is now OFF - disabling BT discovery for session")
-                usbWasConnectedThisSession = true
-                
-                // Cancel any pending Bluetooth timeout to prevent SDK corruption
-                // Note: The timeout is managed in Objective-C, so we call the wrapper to cancel it
-                epsonWrapper.cancelBluetoothTimeout()
+                if isLikelyBluetoothAccessoryName(accessory.name) {
+                    print("DEBUG: NEW accessory connection classified as Bluetooth (by name): \(accessory.name)")
+                    knownBluetoothAccessoryNames.insert(accessory.name)
+                } else {
+                    print("DEBUG: NEW accessory connection detected - USB cable was just plugged in!")
+                    print("DEBUG: Bluetooth hardware on printer is now OFF - disabling BT discovery for session")
+                    usbWasConnectedThisSession = true
+                    
+                    // Cancel any pending Bluetooth timeout to prevent SDK corruption
+                    // Note: The timeout is managed in Objective-C, so we call the wrapper to cancel it
+                    epsonWrapper.cancelBluetoothTimeout()
+                }
             }
             
             connectedAccessories.insert(accessory.name)
@@ -543,7 +553,7 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
         
         let accessories = EAAccessoryManager.shared().connectedAccessories
         let epsonAccessories = accessories.filter { acc in
-            acc.protocolStrings.contains("com.epson.escpos") || acc.protocolStrings.contains("com.epson.posprinter")
+            (acc.protocolStrings.contains("com.epson.escpos") || acc.protocolStrings.contains("com.epson.posprinter"))
         }
         
         if !epsonAccessories.isEmpty {
@@ -556,7 +566,7 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
                 print("DEBUG: EAAccessory device: \(acc.name), connectionID: \(acc.connectionID), protocols: \(acc.protocolStrings)")
                 
                 // If this device was discovered via Bluetooth, it's a BT connection, not USB
-                if currentBluetoothDeviceNames.contains(acc.name) {
+                if currentBluetoothDeviceNames.contains(acc.name) || knownBluetoothAccessoryNames.contains(acc.name) || isLikelyBluetoothAccessoryName(acc.name) {
                     print("DEBUG: Skipping '\(acc.name)' - this is a Bluetooth connection, not USB")
                     return nil
                 }
@@ -581,6 +591,13 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
     private func debugResetStateIfStuck() {
         print("DEBUG: Manual state reset requested (current=\(discoveryState.rawValue))")
         discoveryState = .idle
+    }
+    
+    private func isLikelyBluetoothAccessoryName(_ name: String) -> Bool {
+        // Many Epson BT accessories include a suffix like _XXXXXX (hex) in the display name
+        // e.g., TM-m30III_004541. Use a permissive regex for 4-12 hex chars at end.
+        let pattern = "_([0-9A-Fa-f]{4,12})$"
+        return name.range(of: pattern, options: .regularExpression) != nil
     }
 
     // Expose discovery state & session info to Dart
