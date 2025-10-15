@@ -36,6 +36,11 @@ abstract class EpsonPrinterPlatform extends PlatformInterface {
     throw UnimplementedError('discoverUsbPrinters() has not been implemented.');
   }
 
+  /// Discovers LAN, Bluetooth, and USB in a single orchestrated pass (platform-native)
+  Future<List<String>> discoverAllPrinters() {
+    throw UnimplementedError('discoverAllPrinters() has not been implemented.');
+  }
+
   Future<List<String>> findPairedBluetoothPrinters() {
     throw UnimplementedError('findPairedBluetoothPrinters() has not been implemented.');
   }

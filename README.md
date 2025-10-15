@@ -21,7 +21,10 @@ Tested:
 | iOS         |   LAN, Bluetooth (pre-connected, in-app pairing), usb     | yes |
 | Android     |  LAN, Bluetooth (pre-connected), usb   | yes |
 
-Cannot connect to Bluetooth while printer is wired via USB -- even if the user Disconnects from the usb connection in-app
+The Discover Printers button mirrors the functionality of the Epson TM app's printer discover based on which platform the app is run from.
+On iOS, the plugging in of a usb cable prohibits any future discovery or connection to that same printer via Bluetooth.
+On Android, the device and the printer cannot form a Bluetooth connection after a usb cable connection has been made, but if the cable is removed and Discover Printers is called again, then the tablet can connect with that printer over Bluetooth again.
+
 
 
 ## TODO

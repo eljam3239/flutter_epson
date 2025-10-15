@@ -23,6 +23,11 @@ class EpsonPrinter {
     return _platform.discoverUsbPrinters();
   }
 
+  /// Discovers all printer interfaces in one go (native orchestrated)
+  static Future<List<String>> discoverAllPrinters() {
+    return _platform.discoverAllPrinters();
+  }
+
   @Deprecated('Use discoverBluetoothPrinters() instead; it returns paired and live Bluetooth printers.')
   static Future<List<String>> findPairedBluetoothPrinters() {
     // Alias to keep API simple and consistent

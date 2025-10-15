@@ -168,6 +168,8 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             discoverBluetoothPrinters(call: call, result: result)
         case "discoverUsbPrinters":
             discoverUsbPrinters(result: result)
+        case "discoverAllPrinters":
+            discoverAllPrinters(result: result)
         case "findPairedBluetoothPrinters":
             findPairedBluetoothPrinters(call: call, result: result)
         case "pairBluetoothDevice":
@@ -192,6 +194,85 @@ public class EpsonPrinterIosPlugin: NSObject, FlutterPlugin {
             abortDiscovery(result: result)
         default:
             result(FlutterMethodNotImplemented)
+        }
+    }
+    private func discoverAllPrinters(result: @escaping FlutterResult) {
+        let attemptSession = nextSessionId()
+        if discoveryState == .cleaningUp || discoveryState == .suspendedAfterUsbDisconnect {
+            print("DEBUG: Deferring discoverAll during cleanup/cooldown (session=\(attemptSession))")
+            result([])
+            return
+        }
+        // Orchestrate sequentially on sdkQueue
+        setState(.discoveringLan, sessionId: attemptSession)
+        startWatchdog(sessionId: attemptSession, label: "all")
+        var snapshot: [String] = []
+        sdkQueue.async { [weak self] in
+            guard let self = self else { return }
+            // LAN first
+            do {
+                try self.epsonWrapper.startDiscovery(withFilter: 1) { printers in
+                    for p in printers {
+                        if let t = p["target"] as? String, let n = p["deviceName"] as? String {
+                            snapshot.append("\(t):\(n)")
+                        }
+                    }
+                }
+            } catch { }
+            // Small pause
+            Thread.sleep(forTimeInterval: 0.2)
+            // Bluetooth (skip if USB seen in session)
+            if !self.usbWasConnectedThisSession {
+                do {
+                    self.epsonWrapper.startBluetoothDiscovery { printers in
+                        for p in printers {
+                            if let t = p["target"] as? String, let n = p["deviceName"] as? String {
+                                snapshot.append("\(t):\(n)")
+                            }
+                        }
+                    }
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+            // USB via EAAccessory
+            let accessories = EAAccessoryManager.shared().connectedAccessories
+            let epsonAccessories = accessories.filter { acc in
+                (acc.protocolStrings.contains("com.epson.escpos") || acc.protocolStrings.contains("com.epson.posprinter"))
+            }
+            for acc in epsonAccessories {
+                if self.currentBluetoothDeviceNames.contains(acc.name) || self.knownBluetoothAccessoryNames.contains(acc.name) || self.isLikelyBluetoothAccessoryName(acc.name) {
+                    continue
+                }
+                snapshot.append("USB::\(acc.name)")
+            }
+            // Dedupe and prefer TCP over TCPS
+            var unique: [String: String] = [:] // mac->target
+            var finalList: [String] = []
+            for entry in snapshot {
+                let parts = entry.split(separator: ":")
+                if parts.count >= 8 { // e.g., TCP:AA:BB:CC:DD:EE:FF:Name
+                    let mac = parts[1...6].joined(separator: ":")
+                    let target = parts[0...6].joined(separator: ":")
+                    let name = parts.dropFirst(7).joined(separator: ":")
+                    if let existing = unique[mac] {
+                        if target.hasPrefix("TCP") && existing.hasPrefix("TCPS") {
+                            if let idx = finalList.firstIndex(where: { $0.hasPrefix(existing) }) { finalList.remove(at: idx) }
+                            unique[mac] = target
+                            finalList.append("\(target):\(name)")
+                        }
+                    } else {
+                        unique[mac] = target
+                        finalList.append("\(target):\(name)")
+                    }
+                } else {
+                    if !finalList.contains(entry) { finalList.append(entry) }
+                }
+            }
+            DispatchQueue.main.async {
+                self.clearWatchdog(sessionId: attemptSession)
+                if self.discoverySessionId == attemptSession { self.discoveryState = .idle }
+                result(finalList)
+            }
         }
     }
 

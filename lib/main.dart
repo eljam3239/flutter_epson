@@ -106,8 +106,10 @@ class _MyHomePageState extends State<MyHomePage> {
     // POS style controller
     _headerControllerPos = TextEditingController(text: _headerTitle);
 
-    // Start polling native discovery state (lightweight call)
-    _startDiscoveryStatePolling();
+    // Start polling native discovery state (iOS only)
+    if (Platform.isIOS) {
+      _startDiscoveryStatePolling();
+    }
   }
 
   @override
@@ -1041,7 +1043,7 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
             ),
             // Native discovery state banner (references session and queued work so fields aren't unused)
-            Row(
+            if (Platform.isIOS) Row(
               children: [
                 Expanded(
                   child: Text(
