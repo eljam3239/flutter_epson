@@ -398,7 +398,9 @@
     NSLog(@"Sending print data to printer...");
     int32_t result = [self.printer sendData:EPOS2_PARAM_DEFAULT];
     NSLog(@"Print result: %d (EPOS2_SUCCESS=0)", result);
-    
+    // Important: Clear buffer after send to prevent subsequent operations (e.g., drawer pulse)
+    // from re-sending the previous print content.
+    [self.printer clearCommandBuffer];
     if (result == EPOS2_SUCCESS) {
         NSLog(@"Print job sent successfully");
         return YES;
@@ -456,6 +458,8 @@
 
 - (BOOL)openCashDrawer {
     if (!self.printer) { NSLog(@"openCashDrawer: no printer"); return NO; }
+    // Ensure buffer is clean so we don't accidentally resend prior print data
+    [self.printer clearCommandBuffer];
     // EPOS2_DRAWER_1 does not exist; using EPOS2_DRAWER_2PIN as default (most common)
     int addRes = [self.printer addPulse:EPOS2_DRAWER_2PIN time:EPOS2_PULSE_100];
     if (addRes != EPOS2_SUCCESS) { NSLog(@"addPulse failed: %d", addRes); return NO; }
