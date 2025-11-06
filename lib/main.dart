@@ -91,6 +91,9 @@ class _MyHomePageState extends State<MyHomePage> {
   String _itemRepeat = '3';
   // Estimated characters-per-line for current printer font (adjustable by user)
   int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm often 32 or 42
+  
+  // Paper size selection for labels
+  String _paperSize = '80mm'; // Default to 80mm
   // ===============================================================================
 
   @override
@@ -493,6 +496,80 @@ class _MyHomePageState extends State<MyHomePage> {
         SnackBar(content: Text('Print failed: $e')),
       );
     }
+  }
+
+  Future<void> _printLabel() async {
+    if (!_isConnected) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please connect to a printer first')),
+      );
+      return;
+    }
+
+    try {
+      // Build label commands based on paper size
+      final commands = _buildLabelCommands();
+      final printJob = EpsonPrintJob(commands: commands);
+
+      await EpsonPrinter.printReceipt(printJob);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Label printed successfully!')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Label print failed: $e')),
+      );
+    }
+  }
+
+  List<EpsonPrintCommand> _buildLabelCommands() {
+    final List<EpsonPrintCommand> cmds = [];
+    
+    // Adjust content based on paper size
+    int charsPerLine;
+    switch (_paperSize) {
+      case '38mm':
+        charsPerLine = 24;
+        break;
+      case '58mm':
+        charsPerLine = 32;
+        break;
+      case '80mm':
+      default:
+        charsPerLine = 48;
+        break;
+    }
+
+    // Center text helper for labels
+    String centerText(String text) {
+      text = text.trim();
+      if (text.isEmpty) return '';
+      if (text.length >= charsPerLine) return text;
+      final totalPad = charsPerLine - text.length;
+      final left = (totalPad / 2).floor();
+      final right = totalPad - left;
+      return ' ' * left + text + ' ' * right;
+    }
+
+    // Build label content
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('SAMPLE LABEL') + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('Paper: $_paperSize') + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('Width: $charsPerLine chars') + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '-' * charsPerLine + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('Test Content') + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '-' * charsPerLine + '\n' }));
+    
+    // Final feeds + cut
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}));
+
+    return cmds;
   }
 
   // Build EpsonPrintCommand list from current layout controller contents.
@@ -1035,6 +1112,40 @@ class _MyHomePageState extends State<MyHomePage> {
                         ElevatedButton(
                           onPressed: _isConnected ? _printReceipt : null,
                           child: const Text('Print Structured Receipt'),
+                        ),
+                        const SizedBox(height: 16),
+                        // Paper size selection for labels
+                        const Text('How big is your printer\'s paper?', 
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Radio<String>(
+                              value: '38mm',
+                              groupValue: _paperSize,
+                              onChanged: (value) => setState(() => _paperSize = value!),
+                            ),
+                            const Text('38mm'),
+                            const SizedBox(width: 16),
+                            Radio<String>(
+                              value: '58mm',
+                              groupValue: _paperSize,
+                              onChanged: (value) => setState(() => _paperSize = value!),
+                            ),
+                            const Text('58mm'),
+                            const SizedBox(width: 16),
+                            Radio<String>(
+                              value: '80mm',
+                              groupValue: _paperSize,
+                              onChanged: (value) => setState(() => _paperSize = value!),
+                            ),
+                            const Text('80mm'),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        ElevatedButton(
+                          onPressed: _isConnected ? _printLabel : null,
+                          child: const Text('Print Label'),
                         ),
                       ],
                     ),
