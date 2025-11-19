@@ -1261,6 +1261,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         ElevatedButton(onPressed: _selectedPrinter != null && !_isConnected ? _connectToPrinter : null, child: const Text('Connect')),
                         ElevatedButton(onPressed: _isConnected ? _disconnectFromPrinter : null, child: const Text('Disconnect')),
                         ElevatedButton(onPressed: _isConnected ? _printReceipt : null, child: const Text('Print Test Receipt')),
+                        ElevatedButton(onPressed: _isConnected ? _printLabel : null, child: const Text('Print Label')),
                         ElevatedButton(
                           onPressed: _isConnected
                               ? () async {
