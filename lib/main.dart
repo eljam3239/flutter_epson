@@ -508,15 +508,29 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     try {
-      // Build label commands based on paper size
-      final commands = _buildLabelCommands();
+      // Detect paper width from the printer
+      String detectedWidth = await EpsonPrinter.detectPaperWidth();
+      
+      // Print a simple label showing the detected paper width
+      final commands = [
+        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }),
+        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': 'PAPER WIDTH DETECTION\n' }),
+        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '====================\n' }),
+        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }),
+        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': 'Detected Width: $detectedWidth\n' }),
+        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': 'Manual Selection: $_paperSize\n' }),
+        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }),
+        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '====================\n' }),
+        EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }),
+        EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}),
+      ];
+      
       final printJob = EpsonPrintJob(commands: commands);
-
       await EpsonPrinter.printReceipt(printJob);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Label printed successfully!')),
+        SnackBar(content: Text('Label printed! Detected width: $detectedWidth')),
       );
     } catch (e) {
       if (!mounted) return;

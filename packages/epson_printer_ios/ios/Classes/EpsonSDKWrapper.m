@@ -5,6 +5,44 @@
 #import "EpsonSDKWrapper.h"
 #import <UIKit/UIKit.h>
 
+// Helper delegate class for handling getPrinterSetting callbacks
+@interface PrinterSettingDelegate : NSObject <Epos2PrinterSettingDelegate>
+@property (nonatomic, copy) void (^completionHandler)(NSString *, NSError *);
+@end
+
+@implementation PrinterSettingDelegate
+
+- (void)onGetPrinterSetting:(int32_t)code type:(int32_t)type value:(int32_t)value {
+    NSLog(@"onGetPrinterSetting: code=%d, type=%d, value=%d", code, type, value);
+    
+    if (self.completionHandler) {
+        if (code == EPOS2_CODE_SUCCESS && type == EPOS2_PRINTER_SETTING_PAPERWIDTH) {
+            NSString *paperWidth = [self mapPaperWidthValue:value];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.completionHandler(paperWidth, nil);
+            });
+        } else {
+            NSError *error = [NSError errorWithDomain:@"EpsonSDK" code:code userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"getPrinterSetting failed (code: %d)", code]}];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.completionHandler(nil, error);
+            });
+        }
+    }
+}
+
+- (NSString *)mapPaperWidthValue:(int32_t)value {
+    switch (value) {
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_58_0: return @"58mm";
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_60_0: return @"60mm"; 
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_70_0: return @"70mm";
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_76_0: return @"76mm";
+        case EPOS2_PRINTER_SETTING_PAPERWIDTH_80_0: return @"80mm";
+        default: return [NSString stringWithFormat:@"Unknown(%d)", value];
+    }
+}
+
+@end
+
 // Private interface
 @interface EpsonSDKWrapper ()
 - (void)tryBluetoothDiscovery:(int)portType withFallback:(BOOL)useFallback;
@@ -625,6 +663,52 @@
 
 - (void)onPtrReceive:(Epos2Printer *)printerObj code:(int32_t)code status:(Epos2PrinterStatusInfo *)status printJobId:(NSString *)printJobId {
     NSLog(@"Print job completed with code: %d", code);
+}
+
+#pragma mark - Paper Width Detection
+
+- (void)detectPaperWidthWithCompletion:(void (^)(NSString * _Nullable paperWidth, NSError * _Nullable error))completion {
+    if (!self.printer) {
+        NSError *error = [NSError errorWithDomain:@"EpsonSDK" code:1001 userInfo:@{NSLocalizedDescriptionKey: @"Printer not connected"}];
+        completion(nil, error);
+        return;
+    }
+    
+    // Store completion handler for the callback
+    static void (^staticCompletion)(NSString *, NSError *);
+    staticCompletion = completion;
+    
+    // Create a delegate object to handle the callback
+    static dispatch_once_t onceToken;
+    static PrinterSettingDelegate *settingDelegate;
+    dispatch_once(&onceToken, ^{
+        settingDelegate = [[PrinterSettingDelegate alloc] init];
+    });
+    
+    // Set the static completion handler on our delegate
+    [settingDelegate setCompletionHandler:staticCompletion];
+    
+    // Try the basic getPrinterSetting first
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        int32_t result = [self.printer getPrinterSetting:EPOS2_PARAM_DEFAULT 
+                                                    type:EPOS2_PRINTER_SETTING_PAPERWIDTH 
+                                                delegate:settingDelegate];
+        
+        if (result != EPOS2_SUCCESS) {
+            NSLog(@"getPrinterSetting failed with code: %d, will try getPrinterSettingEx", result);
+            // Fallback to getPrinterSettingEx for models that don't support basic method
+            [self tryGetPrinterSettingExWithCompletion:completion];
+        }
+    });
+}
+
+- (void)tryGetPrinterSettingExWithCompletion:(void (^)(NSString * _Nullable paperWidth, NSError * _Nullable error))completion {
+    // Note: getPrinterSettingEx may not be available in all SDK versions
+    // For now, we'll return an error indicating the advanced method is not available
+    NSError *error = [NSError errorWithDomain:@"EpsonSDK" code:1002 userInfo:@{NSLocalizedDescriptionKey: @"getPrinterSettingEx not available in this SDK version"}];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        completion(nil, error);
+    });
 }
 
 @end
