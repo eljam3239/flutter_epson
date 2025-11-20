@@ -613,6 +613,12 @@ class _MyHomePageState extends State<MyHomePage> {
       parameters: {'line': 1}
     ));
     
+    // Set center alignment for barcode
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'align': 'center'}
+    ));
+    
     // CODE128 barcode with HRI below
     commands.add(EpsonPrintCommand(
       type: EpsonCommandType.barcode,
@@ -626,11 +632,17 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     ));
     
-    // Final spacing and cut
+    // Reset to left alignment after barcode
     commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.feed,
-      parameters: {'line': 2}
+      type: EpsonCommandType.text,
+      parameters: {'align': 'left'}
     ));
+    
+    // // Final spacing and cut
+    // commands.add(EpsonPrintCommand(
+    //   type: EpsonCommandType.feed,
+    //   parameters: {'line': 2}
+    // ));
     
     commands.add(EpsonPrintCommand(
       type: EpsonCommandType.cut,

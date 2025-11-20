@@ -332,10 +332,26 @@
         if ([type isEqualToString:@"addText"] || [type isEqualToString:@"text"]) {
             NSDictionary *parameters = command[@"parameters"];
             NSString *text = parameters[@"data"];
+            NSString *align = parameters[@"align"];
+            
+            // Set alignment if specified
+            if (align) {
+                if ([align.lowercaseString isEqualToString:@"center"]) {
+                    [self.printer addTextAlign:EPOS2_ALIGN_CENTER];
+                    NSLog(@"Setting text alignment to center");
+                } else if ([align.lowercaseString isEqualToString:@"right"]) {
+                    [self.printer addTextAlign:EPOS2_ALIGN_RIGHT];
+                    NSLog(@"Setting text alignment to right");
+                } else {
+                    [self.printer addTextAlign:EPOS2_ALIGN_LEFT];
+                    NSLog(@"Setting text alignment to left");
+                }
+            }
+            
             if (text) {
                 NSLog(@"Adding text: %@", text);
                 [self.printer addText:text];
-            } else {
+            } else if (!align) {
                 NSLog(@"WARNING: Text command missing data parameter");
             }
         } else if ([type isEqualToString:@"addTextLn"]) {
