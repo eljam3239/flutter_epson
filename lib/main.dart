@@ -107,6 +107,9 @@ class _MyHomePageState extends State<MyHomePage> {
   // Paper size selection for labels - all Epson supported widths
   String _labelPaperWidth = '80mm'; // Default to 80mm
   final List<String> _availablePaperWidths = ['58mm', '60mm', '70mm', '76mm', '80mm'];
+  
+  // Number of labels to print
+  int _labelQuantity = 1;
   // ===============================================================================
 
   @override
@@ -553,11 +556,23 @@ class _MyHomePageState extends State<MyHomePage> {
       // Build label commands based on current label fields and paper width
       final commands = _buildLabelCommands();
       final printJob = EpsonPrintJob(commands: commands);
-      await EpsonPrinter.printReceipt(printJob);
+      
+      // Print multiple labels based on quantity setting
+      for (int i = 0; i < _labelQuantity; i++) {
+        await EpsonPrinter.printReceipt(printJob);
+        
+        // Small delay between prints to avoid overwhelming the printer
+        if (i < _labelQuantity - 1) {
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
+      }
 
       if (!mounted) return;
+      final message = _labelQuantity == 1 
+          ? 'Label printed successfully!' 
+          : '$_labelQuantity labels printed successfully!';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Label printed successfully!')),
+        SnackBar(content: Text(message)),
       );
     } catch (e) {
       if (!mounted) return;
@@ -1283,6 +1298,34 @@ class _MyHomePageState extends State<MyHomePage> {
                             ],
                           )).toList(),
                         ),
+                        const SizedBox(height: 16),
+                        // Label quantity slider
+                        const Text('Number of labels to print:', 
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            const Text('1'),
+                            Expanded(
+                              child: Slider(
+                                value: _labelQuantity.toDouble(),
+                                min: 1.0,
+                                max: 10.0,
+                                divisions: 9,
+                                label: _labelQuantity.toString(),
+                                onChanged: (double value) {
+                                  setState(() {
+                                    _labelQuantity = value.round();
+                                  });
+                                },
+                              ),
+                            ),
+                            const Text('10'),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text('Quantity: $_labelQuantity', 
+                          style: const TextStyle(fontSize: 16)),
                         const SizedBox(height: 8),
                         ElevatedButton(
                           onPressed: _isConnected ? _printLabel : null,
