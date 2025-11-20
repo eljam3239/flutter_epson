@@ -92,8 +92,9 @@ class _MyHomePageState extends State<MyHomePage> {
   // Estimated characters-per-line for current printer font (adjustable by user)
   int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm often 32 or 42
   
-  // Paper size selection for labels
-  String _paperSize = '80mm'; // Default to 80mm
+  // Paper size selection for labels - all Epson supported widths
+  String _labelPaperWidth = '80mm'; // Default to 80mm
+  final List<String> _availablePaperWidths = ['58mm', '60mm', '70mm', '76mm', '80mm'];
   // ===============================================================================
 
   @override
@@ -390,10 +391,29 @@ class _MyHomePageState extends State<MyHomePage> {
 
       await EpsonPrinter.connect(settings);
       setState(() => _isConnected = true);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last}')),
-      );
+      
+      // Try to detect paper width and set as default
+      try {
+        String detectedWidth = await EpsonPrinter.detectPaperWidth();
+        if (_availablePaperWidths.contains(detectedWidth)) {
+          setState(() => _labelPaperWidth = detectedWidth);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Connected! Detected paper width: $detectedWidth')),
+          );
+        } else {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last} (Detected: $detectedWidth)')),
+          );
+        }
+      } catch (e) {
+        // Paper width detection failed, but connection succeeded
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Connected to: ${_selectedPrinter!.split(':').last}')),
+        );
+      }
     } catch (e) {
       setState(() => _isConnected = false);
       if (!mounted) return;
@@ -518,7 +538,7 @@ class _MyHomePageState extends State<MyHomePage> {
         EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '====================\n' }),
         EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }),
         EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': 'Detected Width: $detectedWidth\n' }),
-        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': 'Manual Selection: $_paperSize\n' }),
+        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': 'Manual Selection: $_labelPaperWidth\n' }),
         EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }),
         EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '====================\n' }),
         EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }),
@@ -538,52 +558,6 @@ class _MyHomePageState extends State<MyHomePage> {
         SnackBar(content: Text('Label print failed: $e')),
       );
     }
-  }
-
-  List<EpsonPrintCommand> _buildLabelCommands() {
-    final List<EpsonPrintCommand> cmds = [];
-    
-    // Adjust content based on paper size
-    int charsPerLine;
-    switch (_paperSize) {
-      case '38mm':
-        charsPerLine = 24;
-        break;
-      case '58mm':
-        charsPerLine = 32;
-        break;
-      case '80mm':
-      default:
-        charsPerLine = 48;
-        break;
-    }
-
-    // Center text helper for labels
-    String centerText(String text) {
-      text = text.trim();
-      if (text.isEmpty) return '';
-      if (text.length >= charsPerLine) return text;
-      final totalPad = charsPerLine - text.length;
-      final left = (totalPad / 2).floor();
-      final right = totalPad - left;
-      return ' ' * left + text + ' ' * right;
-    }
-
-    // Build label content
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }));
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('SAMPLE LABEL') + '\n' }));
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('Paper: $_paperSize') + '\n' }));
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('Width: $charsPerLine chars') + '\n' }));
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }));
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '-' * charsPerLine + '\n' }));
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('Test Content') + '\n' }));
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '-' * charsPerLine + '\n' }));
-    
-    // Final feeds + cut
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }));
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}));
-
-    return cmds;
   }
 
   // Build EpsonPrintCommand list from current layout controller contents.
@@ -1129,32 +1103,24 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                         const SizedBox(height: 16),
                         // Paper size selection for labels
-                        const Text('How big is your printer\'s paper?', 
+                        const Text('How wide is your label printer paper?', 
                           style: TextStyle(fontWeight: FontWeight.bold)),
                         const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Radio<String>(
-                              value: '38mm',
-                              groupValue: _paperSize,
-                              onChanged: (value) => setState(() => _paperSize = value!),
-                            ),
-                            const Text('38mm'),
-                            const SizedBox(width: 16),
-                            Radio<String>(
-                              value: '58mm',
-                              groupValue: _paperSize,
-                              onChanged: (value) => setState(() => _paperSize = value!),
-                            ),
-                            const Text('58mm'),
-                            const SizedBox(width: 16),
-                            Radio<String>(
-                              value: '80mm',
-                              groupValue: _paperSize,
-                              onChanged: (value) => setState(() => _paperSize = value!),
-                            ),
-                            const Text('80mm'),
-                          ],
+                        // Create radio buttons for all available paper widths
+                        Wrap(
+                          spacing: 16.0,
+                          runSpacing: 8.0,
+                          children: _availablePaperWidths.map((width) => Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Radio<String>(
+                                value: width,
+                                groupValue: _labelPaperWidth,
+                                onChanged: (value) => setState(() => _labelPaperWidth = value!),
+                              ),
+                              Text(width),
+                            ],
+                          )).toList(),
                         ),
                         const SizedBox(height: 8),
                         ElevatedButton(
