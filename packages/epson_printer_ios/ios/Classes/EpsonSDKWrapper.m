@@ -369,8 +369,39 @@
             NSLog(@"Adding feed lines: %d", lineCount);
             [self.printer addFeedLine:lineCount];
         } else if ([type isEqualToString:@"addCut"] || [type isEqualToString:@"cut"]) {
-            NSLog(@"Adding cut command");
-            [self.printer addCut:EPOS2_CUT_FEED];
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *cutType = parameters[@"cutType"] ?: @"feed";
+            
+            if ([cutType.lowercaseString isEqualToString:@"no_feed"]) {
+                NSLog(@"Adding cut command (no feed)");
+                [self.printer addCut:EPOS2_CUT_NO_FEED];
+            } else if ([cutType.lowercaseString isEqualToString:@"reserve"]) {
+                NSLog(@"Adding cut command (reserve)");
+                [self.printer addCut:EPOS2_CUT_RESERVE];
+            } else if ([cutType.lowercaseString isEqualToString:@"full_cut_feed"]) {
+                NSLog(@"Adding full cut command (with feed)");
+                [self.printer addCut:EPOS2_FULL_CUT_FEED];
+            } else if ([cutType.lowercaseString isEqualToString:@"full_cut_no_feed"]) {
+                NSLog(@"Adding full cut command (no feed)");
+                [self.printer addCut:EPOS2_FULL_CUT_NO_FEED];
+            } else {
+                NSLog(@"Adding cut command (with feed)");
+                [self.printer addCut:EPOS2_CUT_FEED];
+            }
+        } else if ([type isEqualToString:@"feedPosition"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *position = parameters[@"position"] ?: @"cutting";
+            
+            if ([position.lowercaseString isEqualToString:@"peeling"]) {
+                NSLog(@"Setting feed position to peeling");
+                [self.printer addFeedPosition:EPOS2_FEED_PEELING];
+            } else if ([position.lowercaseString isEqualToString:@"current_tof"]) {
+                NSLog(@"Setting feed position to current TOF");
+                [self.printer addFeedPosition:EPOS2_FEED_CURRENT_TOF];
+            } else {
+                NSLog(@"Setting feed position to cutting");
+                [self.printer addFeedPosition:EPOS2_FEED_CUTTING];
+            }
         } else if ([type isEqualToString:@"image"]) {
             NSDictionary *parameters = command[@"parameters"];
             NSString *imagePath = parameters[@"imagePath"];

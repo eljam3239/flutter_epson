@@ -323,6 +323,7 @@ enum EpsonCommandType {
   qrCode,
   cut,
   feed,
+  feedPosition,
   pulse,
   beep,
   layout,

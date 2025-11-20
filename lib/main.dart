@@ -583,11 +583,11 @@ class _MyHomePageState extends State<MyHomePage> {
       return ' ' * leftPadding + text + ' ' * rightPadding;
     }
     
-    // Initial spacing
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.feed,
-      parameters: {'line': 1}
-    ));
+    // // Initial spacing
+    // commands.add(EpsonPrintCommand(
+    //   type: EpsonCommandType.feed,
+    //   parameters: {'line': 1}
+    // ));
     
     // Product name (centered at top)
     commands.add(EpsonPrintCommand(
@@ -607,11 +607,11 @@ class _MyHomePageState extends State<MyHomePage> {
       parameters: {'data': centerText(_labelSizeColourController.text.trim()) + '\n'}
     ));
     
-    // Add some space before barcode
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.feed,
-      parameters: {'line': 1}
-    ));
+    // // Add some space before barcode
+    // commands.add(EpsonPrintCommand(
+    //   type: EpsonCommandType.feed,
+    //   parameters: {'line': 1}
+    // ));
     
     // Set center alignment for barcode
     commands.add(EpsonPrintCommand(
@@ -638,15 +638,15 @@ class _MyHomePageState extends State<MyHomePage> {
       parameters: {'align': 'left'}
     ));
     
-    // // Final spacing and cut
+    // // Add minimal spacing before cut to ensure proper positioning
     // commands.add(EpsonPrintCommand(
     //   type: EpsonCommandType.feed,
-    //   parameters: {'line': 2}
+    //   parameters: {'line': 1}
     // ));
     
     commands.add(EpsonPrintCommand(
       type: EpsonCommandType.cut,
-      parameters: {}
+      parameters: {} // Back to default CUT_FEED but with minimal manual feed
     ));
     
     return commands;
