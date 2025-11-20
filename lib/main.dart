@@ -589,10 +589,32 @@ class _MyHomePageState extends State<MyHomePage> {
     //   parameters: {'line': 1}
     // ));
     
-    // Product name (centered at top)
+    // Set bold style for product name
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {
+        'reverse': 'false',
+        'underline': 'false', 
+        'bold': 'true',
+        'color': '1'
+      }
+    ));
+    
+    // Product name (centered at top, bold)
     commands.add(EpsonPrintCommand(
       type: EpsonCommandType.text,
       parameters: {'data': centerText(_labelProductNameController.text.trim()) + '\n'}
+    ));
+    
+    // Reset text style to normal
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.textStyle,
+      parameters: {
+        'reverse': 'false',
+        'underline': 'false',
+        'bold': 'false', 
+        'color': '1'
+      }
     ));
     
     // Price (centered under product name)
@@ -627,7 +649,7 @@ class _MyHomePageState extends State<MyHomePage> {
         'type': 'CODE128_AUTO', // Using CODE128 auto for simplicity
         'hri': 'below', // HRI (Human Readable Interpretation) below barcode
         'width': 2, // Width of single module (2 dots)
-        'height': 60, // Height in dots (good for labels)
+        'height': 35, // Height in dots (good for labels)
         'font': 'A', // Font A for HRI
       }
     ));

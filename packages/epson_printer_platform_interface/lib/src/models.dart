@@ -318,6 +318,7 @@ class EpsonPrinterDiscoveryResult {
 /// Command types for print operations
 enum EpsonCommandType {
   text,
+  textStyle,
   image,
   barcode,
   qrCode,

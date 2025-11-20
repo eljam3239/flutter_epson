@@ -354,6 +354,29 @@
             } else if (!align) {
                 NSLog(@"WARNING: Text command missing data parameter");
             }
+        } else if ([type isEqualToString:@"textStyle"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            
+            // Parse parameters with defaults - parameters are already strings, don't call stringValue
+            BOOL reverse = [parameters[@"reverse"] isEqualToString:@"true"] ? EPOS2_TRUE : EPOS2_FALSE;
+            BOOL underline = [parameters[@"underline"] isEqualToString:@"true"] ? EPOS2_TRUE : EPOS2_FALSE;
+            BOOL bold = [parameters[@"bold"] isEqualToString:@"true"] ? EPOS2_TRUE : EPOS2_FALSE;
+            
+            // Parse color (default to first color)
+            int color = EPOS2_COLOR_1;
+            NSString *colorStr = parameters[@"color"];
+            if ([colorStr isEqualToString:@"none"]) {
+                color = EPOS2_COLOR_NONE;
+            } else if ([colorStr isEqualToString:@"2"]) {
+                color = EPOS2_COLOR_2;
+            } else if ([colorStr isEqualToString:@"3"]) {
+                color = EPOS2_COLOR_3;
+            } else if ([colorStr isEqualToString:@"4"]) {
+                color = EPOS2_COLOR_4;
+            }
+            
+            NSLog(@"Setting text style: reverse=%d, underline=%d, bold=%d, color=%d", reverse, underline, bold, color);
+            [self.printer addTextStyle:reverse ul:underline em:bold color:color];
         } else if ([type isEqualToString:@"addTextLn"]) {
             NSDictionary *parameters = command[@"parameters"];
             NSString *text = parameters[@"data"];
