@@ -57,6 +57,12 @@ class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _footerController = TextEditingController();
   final TextEditingController _logoBase64Controller = TextEditingController(); // Optional Base64 image data
 
+  // Label content controllers
+  final TextEditingController _labelProductNameController = TextEditingController();
+  final TextEditingController _labelPriceController = TextEditingController();
+  final TextEditingController _labelSizeColourController = TextEditingController();
+  final TextEditingController _labelScancodeController = TextEditingController();
+
   // Spacing / formatting knobs (can be adjusted via sliders in upcoming UI card)
   double _headerGap = 1;     // feed lines after header block
   double _lineSpacing = 0;   // extra feeds between detail lines
@@ -92,6 +98,12 @@ class _MyHomePageState extends State<MyHomePage> {
   // Estimated characters-per-line for current printer font (adjustable by user)
   int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm often 32 or 42
   
+  // Label Printing Fields
+  String _labelProductName = 'Sample Product';
+  String _labelPrice = '\$5.00';
+  String _labelSizeColour = 'Small Turquoise';
+  int _labelScancode = 123456789;
+
   // Paper size selection for labels - all Epson supported widths
   String _labelPaperWidth = '80mm'; // Default to 80mm
   final List<String> _availablePaperWidths = ['58mm', '60mm', '70mm', '76mm', '80mm'];
@@ -106,6 +118,12 @@ class _MyHomePageState extends State<MyHomePage> {
     _detailsController.text = 'Order: 12345\\nDate: 2025-01-01 12:34';
     _itemsController.text = '2x Coffee @3.50\\n1x Bagel @2.25';
     _footerController.text = 'Thank you for visiting!';
+
+    // Initialize label controllers with default values
+    _labelProductNameController.text = _labelProductName;
+    _labelPriceController.text = _labelPrice;
+    _labelSizeColourController.text = _labelSizeColour;
+    _labelScancodeController.text = _labelScancode.toString();
 
     // POS style controller
     _headerControllerPos = TextEditingController(text: _headerTitle);
@@ -123,6 +141,10 @@ class _MyHomePageState extends State<MyHomePage> {
     _itemsController.dispose();
     _footerController.dispose();
     _logoBase64Controller.dispose();
+    _labelProductNameController.dispose();
+    _labelPriceController.dispose();
+    _labelSizeColourController.dispose();
+    _labelScancodeController.dispose();
     _headerControllerPos.dispose();
     _statePollTimer?.cancel();
     super.dispose();
@@ -528,35 +550,104 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     try {
-      // Detect paper width from the printer
-      String detectedWidth = await EpsonPrinter.detectPaperWidth();
-      
-      // Print a simple label showing the detected paper width
-      final commands = [
-        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }),
-        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': 'PAPER WIDTH DETECTION\n' }),
-        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '====================\n' }),
-        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }),
-        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': 'Detected Width: $detectedWidth\n' }),
-        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': 'Manual Selection: $_labelPaperWidth\n' }),
-        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' }),
-        EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '====================\n' }),
-        EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 2 }),
-        EpsonPrintCommand(type: EpsonCommandType.cut, parameters: {}),
-      ];
-      
+      // Build label commands based on current label fields and paper width
+      final commands = _buildLabelCommands();
       final printJob = EpsonPrintJob(commands: commands);
       await EpsonPrinter.printReceipt(printJob);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Label printed! Detected width: $detectedWidth')),
+        const SnackBar(content: Text('Label printed successfully!')),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Label print failed: $e')),
       );
+    }
+  }
+
+  List<EpsonPrintCommand> _buildLabelCommands() {
+    final List<EpsonPrintCommand> commands = [];
+    
+    // Get character width based on paper size
+    int charsPerLine = _getCharacterWidth(_labelPaperWidth);
+    
+    // Helper function to center text
+    String centerText(String text) {
+      if (text.isEmpty) return text;
+      if (text.length >= charsPerLine) return text;
+      final totalPadding = charsPerLine - text.length;
+      final leftPadding = (totalPadding / 2).floor();
+      final rightPadding = totalPadding - leftPadding;
+      return ' ' * leftPadding + text + ' ' * rightPadding;
+    }
+    
+    // Initial spacing
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.feed,
+      parameters: {'line': 1}
+    ));
+    
+    // Product name (centered at top)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': centerText(_labelProductNameController.text.trim()) + '\n'}
+    ));
+    
+    // Price (centered under product name)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': centerText(_labelPriceController.text.trim()) + '\n'}
+    ));
+    
+    // Size/Color (centered under price)
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'data': centerText(_labelSizeColourController.text.trim()) + '\n'}
+    ));
+    
+    // Add some space before barcode
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.feed,
+      parameters: {'line': 1}
+    ));
+    
+    // CODE128 barcode with HRI below
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.barcode,
+      parameters: {
+        'data': _labelScancodeController.text.trim(),
+        'type': 'CODE128_AUTO', // Using CODE128 auto for simplicity
+        'hri': 'below', // HRI (Human Readable Interpretation) below barcode
+        'width': 2, // Width of single module (2 dots)
+        'height': 60, // Height in dots (good for labels)
+        'font': 'A', // Font A for HRI
+      }
+    ));
+    
+    // Final spacing and cut
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.feed,
+      parameters: {'line': 2}
+    ));
+    
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.cut,
+      parameters: {}
+    ));
+    
+    return commands;
+  }
+  
+  int _getCharacterWidth(String paperWidth) {
+    switch (paperWidth) {
+      case '58mm': return 32;
+      case '60mm': return 34;
+      case '70mm': return 42;
+      case '76mm': return 45;
+      case '80mm': return 48;
+      default: return 48; // Default to 80mm width
     }
   }
 
@@ -1100,6 +1191,42 @@ class _MyHomePageState extends State<MyHomePage> {
                         ElevatedButton(
                           onPressed: _isConnected ? _printReceipt : null,
                           child: const Text('Print Structured Receipt'),
+                        ),
+                        const SizedBox(height: 16),
+                        // Label content fields
+                        const Text('Label Content', 
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _labelProductNameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Product Name',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _labelPriceController,
+                          decoration: const InputDecoration(
+                            labelText: 'Price',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _labelSizeColourController,
+                          decoration: const InputDecoration(
+                            labelText: 'Size / Colour',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _labelScancodeController,
+                          decoration: const InputDecoration(
+                            labelText: 'Scancode/Barcode',
+                            border: OutlineInputBorder(),
+                          ),
                         ),
                         const SizedBox(height: 16),
                         // Paper size selection for labels

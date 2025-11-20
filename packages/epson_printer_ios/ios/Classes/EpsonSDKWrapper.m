@@ -428,6 +428,69 @@
             } else if (debug) {
                 [self.printer addText:@"[IOS_IMG_END]\n"]; // marker after successful add
             }
+        } else if ([type isEqualToString:@"barcode"]) {
+            NSDictionary *parameters = command[@"parameters"];
+            NSString *data = parameters[@"data"];
+            if (!data || data.length == 0) {
+                NSLog(@"WARNING: Barcode command missing data parameter");
+                continue;
+            }
+            
+            // Parse barcode parameters with defaults
+            NSString *barcodeType = parameters[@"type"] ?: @"CODE128_AUTO";
+            NSString *hriPosition = parameters[@"hri"] ?: @"none";
+            NSString *font = parameters[@"font"] ?: @"A";
+            NSNumber *widthNum = parameters[@"width"];
+            NSNumber *heightNum = parameters[@"height"];
+            
+            int width = widthNum ? widthNum.intValue : 2; // Default width
+            int height = heightNum ? heightNum.intValue : 60; // Default height
+            
+            // Map barcode type string to constants
+            int barcodeTypeConstant = EPOS2_BARCODE_CODE128_AUTO; // Default
+            if ([barcodeType isEqualToString:@"CODE128"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_CODE128;
+            } else if ([barcodeType isEqualToString:@"CODE128_AUTO"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_CODE128_AUTO;
+            } else if ([barcodeType isEqualToString:@"CODE39"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_CODE39;
+            } else if ([barcodeType isEqualToString:@"EAN13"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_EAN13;
+            } else if ([barcodeType isEqualToString:@"UPC_A"]) {
+                barcodeTypeConstant = EPOS2_BARCODE_UPC_A;
+            }
+            
+            // Map HRI position
+            int hriConstant = EPOS2_HRI_NONE; // Default
+            if ([hriPosition isEqualToString:@"below"]) {
+                hriConstant = EPOS2_HRI_BELOW;
+            } else if ([hriPosition isEqualToString:@"above"]) {
+                hriConstant = EPOS2_HRI_ABOVE;
+            } else if ([hriPosition isEqualToString:@"both"]) {
+                hriConstant = EPOS2_HRI_BOTH;
+            }
+            
+            // Map font
+            int fontConstant = EPOS2_FONT_A; // Default
+            if ([font isEqualToString:@"B"]) {
+                fontConstant = EPOS2_FONT_B;
+            } else if ([font isEqualToString:@"C"]) {
+                fontConstant = EPOS2_FONT_C;
+            }
+            
+            NSLog(@"Adding barcode: data=%@, type=%@, hri=%@", data, barcodeType, hriPosition);
+            int barcodeResult = [self.printer addBarcode:data
+                                                    type:barcodeTypeConstant
+                                                     hri:hriConstant
+                                                    font:fontConstant
+                                                   width:width
+                                                  height:height];
+            
+            if (barcodeResult != EPOS2_SUCCESS) {
+                NSLog(@"ERROR: addBarcode failed with code %d", barcodeResult);
+            } else {
+                NSLog(@"Barcode added successfully");
+            }
         } else {
             NSLog(@"WARNING: Unknown command type: %@", type);
         }
