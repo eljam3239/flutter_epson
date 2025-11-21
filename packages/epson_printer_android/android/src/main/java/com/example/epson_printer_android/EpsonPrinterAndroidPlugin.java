@@ -121,6 +121,11 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         abortDiscovery(result);
         break;
       }
+      case "detectPaperWidth": {
+        // Android stub - return 80mm until full implementation
+        result.success("80mm");
+        break;
+      }
       default:
         result.notImplemented();
     }
@@ -808,10 +813,52 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
             switch (type) {
               case "text":
               case "addText": {
-                String data = String.valueOf(params.getOrDefault("data", ""));
-                if (data != null) {
+                String data = (String) params.get("data");
+                String align = (String) params.get("align");
+                
+                // Set alignment if specified
+                if (align != null) {
+                  if (align.equalsIgnoreCase("center")) {
+                    try { mPrinter.addTextAlign(Printer.ALIGN_CENTER); } catch (Exception ignored) {}
+                  } else if (align.equalsIgnoreCase("right")) {
+                    try { mPrinter.addTextAlign(Printer.ALIGN_RIGHT); } catch (Exception ignored) {}
+                  } else {
+                    try { mPrinter.addTextAlign(Printer.ALIGN_LEFT); } catch (Exception ignored) {}
+                  }
+                }
+                
+                if (data != null && !data.isEmpty()) {
                   mPrinter.addText(data);
                 }
+                break;
+              }
+              case "textStyle": {
+                // Parse parameters with defaults
+                boolean reverse = "true".equals(String.valueOf(params.get("reverse")));
+                boolean underline = "true".equals(String.valueOf(params.get("underline")));
+                boolean bold = "true".equals(String.valueOf(params.get("bold")));
+                
+                // Parse color (default to first color)
+                int color = Printer.COLOR_1;
+                String colorStr = (String) params.get("color");
+                if ("none".equals(colorStr)) {
+                  color = Printer.COLOR_NONE;
+                } else if ("2".equals(colorStr)) {
+                  color = Printer.COLOR_2;
+                } else if ("3".equals(colorStr)) {
+                  color = Printer.COLOR_3;
+                } else if ("4".equals(colorStr)) {
+                  color = Printer.COLOR_4;
+                }
+                
+                try {
+                  mPrinter.addTextStyle(
+                    reverse ? Printer.TRUE : Printer.FALSE,
+                    underline ? Printer.TRUE : Printer.FALSE,
+                    bold ? Printer.TRUE : Printer.FALSE,
+                    color
+                  );
+                } catch (Exception ignored) {}
                 break;
               }
               case "image": {
@@ -886,10 +933,102 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
                 break;
               }
               case "cut": {
-                mPrinter.addCut(Printer.CUT_FEED);
+                String cutType = (String) params.get("cutType");
+                if ("no_feed".equalsIgnoreCase(cutType)) {
+                  mPrinter.addCut(Printer.CUT_NO_FEED);
+                } else if ("reserve".equalsIgnoreCase(cutType)) {
+                  mPrinter.addCut(Printer.CUT_RESERVE);
+                } else if ("full_cut_feed".equalsIgnoreCase(cutType)) {
+                  mPrinter.addCut(Printer.FULL_CUT_FEED);
+                } else if ("full_cut_no_feed".equalsIgnoreCase(cutType)) {
+                  mPrinter.addCut(Printer.FULL_CUT_NO_FEED);
+                } else {
+                  mPrinter.addCut(Printer.CUT_FEED);
+                }
                 break;
               }
-              // Additional commands (barcode/qrCode/image/pulse/beep/layout) can be added later
+              case "feedPosition": {
+                String position = (String) params.get("position");
+                if ("peeling".equalsIgnoreCase(position)) {
+                  mPrinter.addFeedPosition(Printer.FEED_PEELING);
+                } else if ("current_tof".equalsIgnoreCase(position)) {
+                  mPrinter.addFeedPosition(Printer.FEED_CURRENT_TOF);
+                } else {
+                  mPrinter.addFeedPosition(Printer.FEED_CUTTING);
+                }
+                break;
+              }
+              case "barcode": {
+                String data = (String) params.get("data");
+                String typeStr = (String) params.get("type");
+                String hriStr = (String) params.get("hri");
+                String fontStr = (String) params.get("font");
+                Object widthObj = params.get("width");
+                Object heightObj = params.get("height");
+                
+                if (data == null || data.isEmpty()) {
+                  break; // Skip if no data
+                }
+                
+                // Map barcode type
+                int barcodeType = Printer.BARCODE_CODE128_AUTO; // Default
+                if ("CODE128_AUTO".equals(typeStr)) {
+                  barcodeType = Printer.BARCODE_CODE128_AUTO;
+                } else if ("CODE128".equals(typeStr)) {
+                  barcodeType = Printer.BARCODE_CODE128;
+                } else if ("UPC_A".equals(typeStr)) {
+                  barcodeType = Printer.BARCODE_UPC_A;
+                } else if ("UPC_E".equals(typeStr)) {
+                  barcodeType = Printer.BARCODE_UPC_E;
+                } else if ("EAN13".equals(typeStr)) {
+                  barcodeType = Printer.BARCODE_EAN13;
+                } else if ("EAN8".equals(typeStr)) {
+                  barcodeType = Printer.BARCODE_EAN8;
+                } else if ("CODE39".equals(typeStr)) {
+                  barcodeType = Printer.BARCODE_CODE39;
+                }
+                
+                // Map HRI position
+                int hri = Printer.HRI_NONE; // Default
+                if ("below".equals(hriStr)) {
+                  hri = Printer.HRI_BELOW;
+                } else if ("above".equals(hriStr)) {
+                  hri = Printer.HRI_ABOVE;
+                } else if ("both".equals(hriStr)) {
+                  hri = Printer.HRI_BOTH;
+                }
+                
+                // Map font
+                int font = Printer.FONT_A; // Default
+                if ("B".equals(fontStr)) {
+                  font = Printer.FONT_B;
+                } else if ("C".equals(fontStr)) {
+                  font = Printer.FONT_C;
+                } else if ("D".equals(fontStr)) {
+                  font = Printer.FONT_D;
+                } else if ("E".equals(fontStr)) {
+                  font = Printer.FONT_E;
+                }
+                
+                // Parse width and height
+                int width = 2; // Default
+                if (widthObj instanceof Number) {
+                  width = ((Number) widthObj).intValue();
+                  if (width < 2 || width > 6) width = 2;
+                }
+                
+                int height = 60; // Default
+                if (heightObj instanceof Number) {
+                  height = ((Number) heightObj).intValue();
+                  if (height < 1 || height > 255) height = 60;
+                }
+                
+                try {
+                  mPrinter.addBarcode(data, barcodeType, hri, font, width, height);
+                } catch (Exception ignored) {}
+                break;
+              }
+              // Additional commands (qrCode/image/pulse/beep/layout) can be added later
               default:
                 // Ignore unknown commands for now
                 break;
