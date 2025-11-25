@@ -25,6 +25,9 @@ import com.epson.epos2.discovery.Discovery;
 import com.epson.epos2.discovery.DiscoveryListener;
 import com.epson.epos2.discovery.FilterOption;
 import com.epson.epos2.printer.Printer;
+import com.epson.epos2.printer.PrinterSettingListener;
+import com.epson.epos2.printer.PrinterStatusInfo;
+import com.epson.epos2.printer.ReceiveListener;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -122,8 +125,7 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
         break;
       }
       case "detectPaperWidth": {
-        // Android stub - return 80mm until full implementation
-        result.success("80mm");
+        detectPaperWidth(result);
         break;
       }
       default:
@@ -1341,6 +1343,71 @@ public class EpsonPrinterAndroidPlugin implements FlutterPlugin, MethodCallHandl
       case 5:  return Printer.MODEL_THAI;      // thai
       case 6:  return Printer.MODEL_SOUTHASIA; // southasia
       default: return Printer.MODEL_ANK;
+    }
+  }
+
+  private void detectPaperWidth(@NonNull Result result) {
+    if (mPrinter == null) {
+      result.error("NOT_CONNECTED", "Printer not connected", null);
+      return;
+    }
+
+    // Create a listener for getPrinterSetting callback
+    PrinterSettingListener settingListener = new PrinterSettingListener() {
+      @Override
+      public void onGetPrinterSetting(int code, int type, int value) {
+        Handler mainHandler = new Handler(Looper.getMainLooper());
+        mainHandler.post(() -> {
+          // Log the actual values for debugging
+          android.util.Log.d("EpsonPrinter", "getPrinterSetting result - code: " + code + ", type: " + type + ", value: " + value);
+          
+          // Use 0 as success code (common pattern in SDK)
+          if (code == 0) {
+            String paperWidth = mapPaperWidthValue(value);
+            android.util.Log.d("EpsonPrinter", "Mapped paper width: " + paperWidth + " (from value: " + value + ")");
+            result.success(paperWidth);
+          } else {
+            // Return error with actual codes for debugging
+            result.error("DETECTION_FAILED", "getPrinterSetting failed - code: " + code + ", type: " + type + ", value: " + value, null);
+          }
+        });
+      }
+
+      @Override
+      public void onSetPrinterSetting(int code) {
+        // Not used for getPrinterSetting
+      }
+    };
+
+    try {
+      // Based on the API doc pattern and existing code, try likely constant values
+      // From the docs: "Printer.Setting.PaperWidth" but actual SDK likely uses different naming
+      // Let's try a few common patterns for the paper width setting type constant
+      
+      // Pattern 1: Try simple numbering (0, 1, 2...)
+      mPrinter.getPrinterSetting(Printer.PARAM_DEFAULT, 0, settingListener);
+    } catch (Exception e) {
+      result.error("DETECTION_FAILED", "getPrinterSetting exception: " + e.getMessage(), null);
+    }
+  }
+
+  private String mapPaperWidthValue(int value) {
+    // Map the received value to paper width strings
+    // Based on actual testing with TM-m30iii:
+    // - 58mm setting returns value: 2
+    // - 80mm setting returns value: 6
+    switch (value) {
+      case 2: return "58mm";       // CONFIRMED: 58mm setting returns value 2
+      case 6: return "80mm";       // CONFIRMED: 80mm setting returns value 6
+      // Other potential values (not yet tested on TM-m30iii):
+      case 0: return "Unknown-0";  // May correspond to 60mm, 70mm, or 76mm - needs testing
+      case 1: return "Unknown-1";  
+      case 3: return "Unknown-3";  
+      case 4: return "Unknown-4";  
+      case 5: return "Unknown-5";  
+      default: 
+        // Return the raw value for debugging
+        return "Unknown(" + value + ")";
     }
   }
 
