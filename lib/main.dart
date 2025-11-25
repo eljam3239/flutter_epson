@@ -742,67 +742,85 @@ class _MyHomePageState extends State<MyHomePage> {
     return cmds;
   }
 
-  // ===================== POS Receipt Formatting Helpers =====================
-  String _center(String text) {
-    text = text.trim();
-    if (text.isEmpty) return '';
-    if (text.length >= _posCharsPerLine) return text;
-    final totalPad = _posCharsPerLine - text.length;
-    final left = (totalPad / 2).floor();
-    final right = totalPad - left;
-    return ' ' * left + text + ' ' * right;
-  }
-
-  String _horizontalLine() => '-' * _posCharsPerLine;
-
-  String _leftRight(String left, String right) {
-    left = left.trim();
-    right = right.trim();
-    final space = _posCharsPerLine - left.length - right.length;
-    if (space < 1) {
-      final maxLeft = _posCharsPerLine - right.length - 1;
-      if (maxLeft < 1) return (left + right).substring(0, _posCharsPerLine);
-      left = left.substring(0, maxLeft);
-      return '$left ${right}';
-    }
-    return left + ' ' * space + right;
-  }
-
-  String _qtyNamePrice(String qty, String name, String price) {
-    // Layout: qty (3) name (left) price (right) within paper width.
-    qty = qty.trim();
-    name = name.trim();
-    price = price.trim();
-    const qtyWidth = 4; // e.g. '999x'
-    const priceWidth = 8; // enough for large price
-    final qtyStr = qty.length > 3 ? qty.substring(0, 3) : qty;
-    final qtyField = qtyStr.padRight(qtyWidth);
-    // Remaining width for name = total - qtyWidth - priceWidth
-    final nameWidth = _posCharsPerLine - qtyWidth - priceWidth;
-    String nameTrunc = name;
-    if (nameTrunc.length > nameWidth) nameTrunc = nameTrunc.substring(0, nameWidth);
-    final priceField = price.padLeft(priceWidth);
-    return qtyField + nameTrunc.padRight(nameWidth) + priceField;
-  }
-  // ==========================================================================
-
   List<EpsonPrintCommand> _buildPosReceiptCommands() {
     final List<EpsonPrintCommand> cmds = [];
 
+    // Calculate the correct characters per line based on detected paper width
+    int effectiveCharsPerLine;
+    switch (_labelPaperWidth) {
+      case '58mm': effectiveCharsPerLine = 32; break;  // 58mm typically 32 chars
+      case '60mm': effectiveCharsPerLine = 34; break;  // 60mm typically 34 chars  
+      case '70mm': effectiveCharsPerLine = 42; break;  // 70mm typically 42 chars
+      case '76mm': effectiveCharsPerLine = 45; break;  // 76mm typically 45 chars
+      case '80mm': effectiveCharsPerLine = 48; break;  // 80mm typically 48 chars
+      default:     effectiveCharsPerLine = _posCharsPerLine; break; // Fallback to current setting
+    }
+
+    // Helper functions that use the correct character width
+    String centerText(String text) {
+      text = text.trim();
+      if (text.isEmpty) return '';
+      if (text.length >= effectiveCharsPerLine) return text;
+      final totalPad = effectiveCharsPerLine - text.length;
+      final left = (totalPad / 2).floor();
+      final right = totalPad - left;
+      return ' ' * left + text + ' ' * right;
+    }
+
+    String horizontalLine() => '-' * effectiveCharsPerLine;
+
+    String leftRight(String left, String right) {
+      left = left.trim();
+      right = right.trim();
+      final space = effectiveCharsPerLine - left.length - right.length;
+      if (space < 1) {
+        final maxLeft = effectiveCharsPerLine - right.length - 1;
+        if (maxLeft < 1) return (left + right).substring(0, effectiveCharsPerLine);
+        left = left.substring(0, maxLeft);
+        return '$left ${right}';
+      }
+      return left + ' ' * space + right;
+    }
+
+    String qtyNamePrice(String qty, String name, String price) {
+      // Layout: qty (3) name (left) price (right) within paper width.
+      qty = qty.trim();
+      name = name.trim();
+      price = price.trim();
+      
+      // Adjust field widths for narrower paper
+      final qtyWidth = effectiveCharsPerLine >= 40 ? 4 : 3; // e.g. '99x' for narrow paper
+      final priceWidth = effectiveCharsPerLine >= 40 ? 8 : 6; // Shorter price field for narrow paper
+      
+      final qtyStr = qty.length > (qtyWidth - 1) ? qty.substring(0, qtyWidth - 1) : qty;
+      final qtyField = (qtyStr + 'x').padRight(qtyWidth);
+      
+      // Remaining width for name = total - qtyWidth - priceWidth
+      final nameWidth = effectiveCharsPerLine - qtyWidth - priceWidth;
+      String nameTrunc = name;
+      if (nameTrunc.length > nameWidth) nameTrunc = nameTrunc.substring(0, nameWidth);
+      
+      // Ensure price has '$' prefix
+      final formattedPrice = price.startsWith('\$') ? price : '\$$price';
+      final priceField = formattedPrice.padLeft(priceWidth);
+      
+      return qtyField + nameTrunc.padRight(nameWidth) + priceField;
+    }
+
     int _estimatePrinterDots() {
-      // Rough heuristic mapping from characters-per-line to dot width.
-      if (_posCharsPerLine <= 32) return 384;   // 58mm common
-      if (_posCharsPerLine <= 42) return 512;   // 72mm or dense 58mm fonts
-      if (_posCharsPerLine <= 48) return 576;   // 80mm Font A
-      if (_posCharsPerLine <= 56) return 640;   // Some 3" models
-      if (_posCharsPerLine <= 64) return 832;   // 80mm Font B / high density
+      // Map from effective chars per line to dot width
+      if (effectiveCharsPerLine <= 32) return 384;   // 58mm common
+      if (effectiveCharsPerLine <= 42) return 512;   // 72mm or dense 58mm fonts
+      if (effectiveCharsPerLine <= 48) return 576;   // 80mm Font A
+      if (effectiveCharsPerLine <= 56) return 640;   // Some 3" models
+      if (effectiveCharsPerLine <= 64) return 832;   // 80mm Font B / high density
       return 576; // fallback
     }
     final printerWidthDots = _estimatePrinterDots();
 
     String title = _headerControllerPos.text.trim().isNotEmpty ? _headerControllerPos.text.trim() : _headerTitle.trim();
     if (title.isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(title) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(title) + '\n' }));
       if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
         // Persist logo to temp file for native side
         try {
@@ -823,7 +841,7 @@ class _MyHomePageState extends State<MyHomePage> {
           }
         } catch (_) {
           // Fallback marker if file write fails
-          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center('[LOGO ERR]') + '\n' }));
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('[LOGO ERR]') + '\n' }));
         }
       }
       if (_headerSpacingLines > 0) {
@@ -841,36 +859,36 @@ class _MyHomePageState extends State<MyHomePage> {
     };
 
     if (_locationText.trim().isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _center(_locationText.trim()) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(_locationText.trim()) + '\n' }));
     }
 
     // Centered 'Receipt'
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' + _center('Receipt') + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' + centerText('Receipt') + '\n' }));
 
     // Date Time (left) vs Cashier (right)
     final dateTime = '${_date.trim()} ${_time.trim()}';
     final cashierStr = 'Cashier: ${_cashier.trim()}';
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _leftRight(dateTime, cashierStr) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(dateTime, cashierStr) + '\n' }));
 
     // Receipt # vs Lane
     final recLine = 'Receipt: ${_receiptNum.trim()}';
     final laneLine = 'Lane: ${_lane.trim()}';
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _leftRight(recLine, laneLine) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(recLine, laneLine) + '\n' }));
 
     // Blank line
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
 
     // Horizontal line
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
 
     // Items repeated
     final repeatCount = int.tryParse(_itemRepeat) ?? 1;
     for (int i = 0; i < repeatCount; i++) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _qtyNamePrice(_itemQuantity, _itemName, _itemPrice) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': qtyNamePrice(_itemQuantity, _itemName, _itemPrice) + '\n' }));
     }
 
     // Second horizontal line
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
 
     if (_footer.trim().isNotEmpty) {
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _footer.trim() + '\n' }));
