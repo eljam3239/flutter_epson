@@ -585,24 +585,12 @@ class _MyHomePageState extends State<MyHomePage> {
   List<EpsonPrintCommand> _buildLabelCommands() {
     final List<EpsonPrintCommand> commands = [];
     
-    // Get character width based on paper size
-    int charsPerLine = _getCharacterWidth(_labelPaperWidth);
-    
-    // Helper function to center text
-    String centerText(String text) {
-      if (text.isEmpty) return text;
-      if (text.length >= charsPerLine) return text;
-      final totalPadding = charsPerLine - text.length;
-      final leftPadding = (totalPadding / 2).floor();
-      final rightPadding = totalPadding - leftPadding;
-      return ' ' * leftPadding + text + ' ' * rightPadding;
-    }
-    
-    // // Initial spacing
-    // commands.add(EpsonPrintCommand(
-    //   type: EpsonCommandType.feed,
-    //   parameters: {'line': 1}
-    // ));
+    // Use SDK centering for all elements to match barcode centering
+    // Set center alignment for all text elements
+    commands.add(EpsonPrintCommand(
+      type: EpsonCommandType.text,
+      parameters: {'align': 'center'}
+    ));
     
     // Set bold style for product name
     commands.add(EpsonPrintCommand(
@@ -618,7 +606,7 @@ class _MyHomePageState extends State<MyHomePage> {
     // Product name (centered at top, bold)
     commands.add(EpsonPrintCommand(
       type: EpsonCommandType.text,
-      parameters: {'data': centerText(_labelProductNameController.text.trim()) + '\n'}
+      parameters: {'data': _labelProductNameController.text.trim() + '\n'}
     ));
     
     // Reset text style to normal
@@ -635,28 +623,16 @@ class _MyHomePageState extends State<MyHomePage> {
     // Price (centered under product name)
     commands.add(EpsonPrintCommand(
       type: EpsonCommandType.text,
-      parameters: {'data': centerText(_labelPriceController.text.trim()) + '\n'}
+      parameters: {'data': _labelPriceController.text.trim() + '\n'}
     ));
     
     // Size/Color (centered under price)
     commands.add(EpsonPrintCommand(
       type: EpsonCommandType.text,
-      parameters: {'data': centerText(_labelSizeColourController.text.trim()) + '\n'}
+      parameters: {'data': _labelSizeColourController.text.trim() + '\n'}
     ));
     
-    // // Add some space before barcode
-    // commands.add(EpsonPrintCommand(
-    //   type: EpsonCommandType.feed,
-    //   parameters: {'line': 1}
-    // ));
-    
-    // Set center alignment for barcode
-    commands.add(EpsonPrintCommand(
-      type: EpsonCommandType.text,
-      parameters: {'align': 'center'}
-    ));
-    
-    // CODE128 barcode with HRI below
+    // CODE128 barcode with HRI below (center alignment already set)
     commands.add(EpsonPrintCommand(
       type: EpsonCommandType.barcode,
       parameters: {
@@ -669,7 +645,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     ));
     
-    // Reset to left alignment after barcode
+    // Reset to left alignment after all label content
     commands.add(EpsonPrintCommand(
       type: EpsonCommandType.text,
       parameters: {'align': 'left'}
@@ -687,17 +663,6 @@ class _MyHomePageState extends State<MyHomePage> {
     ));
     
     return commands;
-  }
-  
-  int _getCharacterWidth(String paperWidth) {
-    switch (paperWidth) {
-      case '58mm': return 32;
-      case '60mm': return 34;
-      case '70mm': return 42;
-      case '76mm': return 45;
-      case '80mm': return 48;
-      default: return 48; // Default to 80mm width
-    }
   }
 
   // Build EpsonPrintCommand list from current layout controller contents.
