@@ -891,7 +891,7 @@ class _MyHomePageState extends State<MyHomePage> {
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
 
     if (_footer.trim().isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _footer.trim() + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(_footer.trim()) + '\n' }));
     }
 
     // End feeds + cut
