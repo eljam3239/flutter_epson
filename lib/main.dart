@@ -759,6 +759,37 @@ class _MyHomePageState extends State<MyHomePage> {
     // Helper functions that use the correct character width
     String horizontalLine() => '-' * effectiveCharsPerLine;
 
+    // Wrap long text to fit within the specified character width
+    List<String> wrapText(String text, int maxWidth) {
+      text = text.trim();
+      if (text.isEmpty) return [];
+      
+      final List<String> lines = [];
+      final words = text.split(' ');
+      String currentLine = '';
+      
+      for (String word in words) {
+        final testLine = currentLine.isEmpty ? word : '$currentLine $word';
+        if (testLine.length <= maxWidth) {
+          currentLine = testLine;
+        } else {
+          if (currentLine.isNotEmpty) {
+            lines.add(currentLine);
+            currentLine = word;
+          } else {
+            // Single word longer than maxWidth - just add it
+            lines.add(word);
+          }
+        }
+      }
+      
+      if (currentLine.isNotEmpty) {
+        lines.add(currentLine);
+      }
+      
+      return lines;
+    }
+
     String leftRight(String left, String right) {
       left = left.trim();
       right = right.trim();
@@ -812,7 +843,11 @@ class _MyHomePageState extends State<MyHomePage> {
     if (title.isNotEmpty) {
       // Use SDK centering like labels instead of manual padding
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': title + '\n' }));
+      // Wrap title text to respect the selected paper width
+      final wrappedTitleLines = wrapText(title, effectiveCharsPerLine);
+      for (String line in wrappedTitleLines) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': line + '\n' }));
+      }
       if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
         // Persist logo to temp file for native side
         try {
@@ -854,7 +889,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
     if (_locationText.trim().isNotEmpty) {
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _locationText.trim() + '\n' }));
+      // Wrap location text to respect the selected paper width
+      final wrappedLocationLines = wrapText(_locationText.trim(), effectiveCharsPerLine);
+      for (String line in wrappedLocationLines) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': line + '\n' }));
+      }
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
@@ -900,7 +939,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
     if (_footer.trim().isNotEmpty) {
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _footer.trim() + '\n' }));
+      // Wrap footer text to respect the selected paper width
+      final wrappedFooterLines = wrapText(_footer.trim(), effectiveCharsPerLine);
+      for (String line in wrappedFooterLines) {
+        cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': line + '\n' }));
+      }
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
