@@ -748,7 +748,7 @@ class _MyHomePageState extends State<MyHomePage> {
     // Calculate the correct characters per line based on detected paper width
     int effectiveCharsPerLine;
     switch (_labelPaperWidth) {
-      case '58mm': effectiveCharsPerLine = 42; break;  // 58mm - increased to match natural printer width
+      case '58mm': effectiveCharsPerLine = 35; break;  // 58mm - more conservative to match real 58mm behavior
       case '60mm': effectiveCharsPerLine = 34; break;  // 60mm typically 34 chars  
       case '70mm': effectiveCharsPerLine = 42; break;  // 70mm typically 42 chars
       case '76mm': effectiveCharsPerLine = 45; break;  // 76mm typically 45 chars
