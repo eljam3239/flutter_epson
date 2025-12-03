@@ -93,7 +93,7 @@ class _MyHomePageState extends State<MyHomePage> {
   // Single item template (will repeat itemRepeat times)
   String _itemQuantity = '1';
   String _itemName = 'Orange';
-  String _itemPrice = '5.00';
+  String _itemPrice = '5000.00';
   String _itemRepeat = '3';
   // Estimated characters-per-line for current printer font (adjustable by user)
   int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm often 32 or 42
@@ -748,7 +748,7 @@ class _MyHomePageState extends State<MyHomePage> {
     // Calculate the correct characters per line based on detected paper width
     int effectiveCharsPerLine;
     switch (_labelPaperWidth) {
-      case '58mm': effectiveCharsPerLine = 32; break;  // 58mm typically 32 chars
+      case '58mm': effectiveCharsPerLine = 42; break;  // 58mm - increased to match natural printer width
       case '60mm': effectiveCharsPerLine = 34; break;  // 60mm typically 34 chars  
       case '70mm': effectiveCharsPerLine = 42; break;  // 70mm typically 42 chars
       case '76mm': effectiveCharsPerLine = 45; break;  // 76mm typically 45 chars
