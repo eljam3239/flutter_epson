@@ -757,16 +757,6 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     // Helper functions that use the correct character width
-    String centerText(String text) {
-      text = text.trim();
-      if (text.isEmpty) return '';
-      if (text.length >= effectiveCharsPerLine) return text;
-      final totalPad = effectiveCharsPerLine - text.length;
-      final left = (totalPad / 2).floor();
-      final right = totalPad - left;
-      return ' ' * left + text + ' ' * right;
-    }
-
     String horizontalLine() => '-' * effectiveCharsPerLine;
 
     String leftRight(String left, String right) {
@@ -820,7 +810,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
     String title = _headerControllerPos.text.trim().isNotEmpty ? _headerControllerPos.text.trim() : _headerTitle.trim();
     if (title.isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(title) + '\n' }));
+      // Use SDK centering like labels instead of manual padding
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': title + '\n' }));
       if (_logoBase64 != null && _logoBase64!.isNotEmpty) {
         // Persist logo to temp file for native side
         try {
@@ -841,12 +833,14 @@ class _MyHomePageState extends State<MyHomePage> {
           }
         } catch (_) {
           // Fallback marker if file write fails
-          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText('[LOGO ERR]') + '\n' }));
+          cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '[LOGO ERR]' + '\n' }));
         }
       }
       if (_headerSpacingLines > 0) {
         cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': _headerSpacingLines }));
       }
+      // Reset to left alignment after title
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
     // Future style/image usage placeholder (avoid unused field warnings until implemented)
@@ -859,11 +853,15 @@ class _MyHomePageState extends State<MyHomePage> {
     };
 
     if (_locationText.trim().isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(_locationText.trim()) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _locationText.trim() + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
     // Centered 'Receipt'
-    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\n' + centerText('Receipt') + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\nReceipt\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
     // Date Time (left) vs Cashier (right)
     final dateTime = '${_date.trim()} ${_time.trim()}';
@@ -891,7 +889,9 @@ class _MyHomePageState extends State<MyHomePage> {
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
 
     if (_footer.trim().isNotEmpty) {
-      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': centerText(_footer.trim()) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': _footer.trim() + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
     // End feeds + cut
