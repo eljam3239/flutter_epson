@@ -863,30 +863,40 @@ class _MyHomePageState extends State<MyHomePage> {
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': '\nReceipt\n' }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
-    // Date Time (left) vs Cashier (right)
+    // Date Time (left) vs Cashier (right) - center the whole line using SDK
     final dateTime = '${_date.trim()} ${_time.trim()}';
     final cashierStr = 'Cashier: ${_cashier.trim()}';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(dateTime, cashierStr) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
-    // Receipt # vs Lane
+    // Receipt # vs Lane - center the whole line using SDK
     final recLine = 'Receipt: ${_receiptNum.trim()}';
     final laneLine = 'Lane: ${_lane.trim()}';
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': leftRight(recLine, laneLine) + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
     // Blank line
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.feed, parameters: { 'line': 1 }));
 
-    // Horizontal line
+    // Horizontal line - center using SDK
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
-    // Items repeated
+    // Items repeated - center each item line using SDK
     final repeatCount = int.tryParse(_itemRepeat) ?? 1;
     for (int i = 0; i < repeatCount; i++) {
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': qtyNamePrice(_itemQuantity, _itemName, _itemPrice) + '\n' }));
+      cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
     }
 
-    // Second horizontal line
+    // Second horizontal line - center using SDK
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
     cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'data': horizontalLine() + '\n' }));
+    cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'left' }));
 
     if (_footer.trim().isNotEmpty) {
       cmds.add(EpsonPrintCommand(type: EpsonCommandType.text, parameters: { 'align': 'center' }));
