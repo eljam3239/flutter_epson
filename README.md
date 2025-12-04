@@ -1,6 +1,7 @@
-# Flutter Epson Printer SDK Demo
+# Flutter Epson SDK Wrapper
 
 A comprehensive Flutter application demonstrating thermal receipt and label printing using the Epson ePOS2 SDK. This app showcases cross-platform (iOS/Android) printer discovery, connection management, and advanced printing features.
+This repository is a Flutter wrapper of the ePOS2 iOS (Objective-C) and Android(Java) SDKs, following Flutter's federated [plugin architecture](https://docs.flutter.dev/packages-and-plugins/developing-packages#federated-plugins) spec.
 
 ## Features
 
