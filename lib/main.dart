@@ -49,8 +49,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Timer? _statePollTimer;
   
   // ================= Receipt Layout State (Structured Formatting) =================
-  // Controllers for dynamic receipt fields. These will allow the user to build
-  // argument-driven receipts similar to the Star printer sample.
+  // Controllers for dynamic receipt fields. These will allow the user to build argument-driven receipts
   final TextEditingController _headerController = TextEditingController();
   final TextEditingController _detailsController = TextEditingController(); // Multiline: key: value or free-form lines
   final TextEditingController _itemsController = TextEditingController();   // Multiline: item lines (e.g. "2x Coffee @ 3.50")
@@ -68,16 +67,12 @@ class _MyHomePageState extends State<MyHomePage> {
   double _lineSpacing = 0;   // extra feeds between detail lines
   double _itemSpacing = 0;   // extra feeds between item lines
 
-  // Future: cache of parsed items / prebuilt commands if optimization needed.
-  // For now we rebuild on each print.
-  // ===============================================================================
-
   // ================= POS Style Receipt Fields (Specific Layout) ==================
   String _headerTitle = "Wendy's";
-  int _headerFontSize = 32; // placeholder (SDK may later support styles)
+  int _headerFontSize = 32; 
   int _headerSpacingLines = 1;
   String? _logoBase64; // optional centered image
-  int _imageWidthPx = 200; // placeholder for future image scaling
+  int _imageWidthPx = 200; 
   int _imageSpacingLines = 1;
   late final TextEditingController _headerControllerPos; // direct edit of title if needed
 
@@ -96,7 +91,7 @@ class _MyHomePageState extends State<MyHomePage> {
   String _itemPrice = '5000.00';
   String _itemRepeat = '3';
   // Estimated characters-per-line for current printer font (adjustable by user)
-  int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm often 32 or 42
+  int _posCharsPerLine = 48; // 80mm common: 48 (Font A) or 64 (Font B); 58mm 35 right now
   
   // Label Printing Fields
   String _labelProductName = 'Sample Product';
@@ -115,8 +110,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    // Defer Bluetooth permission requests to Bluetooth actions.
-    // Seed some default demo content for structured receipt fields.
+    // Initialize receipt controllers with default values
     _headerController.text = 'My Shop\\n123 Sample Street';
     _detailsController.text = 'Order: 12345\\nDate: 2025-01-01 12:34';
     _itemsController.text = '2x Coffee @3.50\\n1x Bagel @2.25';
@@ -152,7 +146,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _statePollTimer?.cancel();
     super.dispose();
   }
-
+  // Start periodic polling of native discovery state (iOS only) to handle USB/Bluetooth logic by setting the flag
   void _startDiscoveryStatePolling() {
     _statePollTimer?.cancel();
     _statePollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
@@ -210,7 +204,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     }
   }
-
+  //funny artifact from the early days
   void _incrementCounter() {
     setState(() {
       _counter++;
@@ -222,7 +216,8 @@ class _MyHomePageState extends State<MyHomePage> {
       final printers = await EpsonPrinter.discoverPrinters();
       setState(() {
         _discoveredPrinters = printers;
-        if (_selectedPrinter == null || !printers.contains(_selectedPrinter)) {
+        //if any printers are discovered the selectec printer is set to first
+        if (_selectedPrinter == null || !printers.contains(_selectedPrinter)) { 
           _selectedPrinter = printers.isNotEmpty ? printers.first : null;
         }
       });
@@ -238,6 +233,7 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  //one button discovery
   Future<void> _discoverAllPrinters() async {
     // Prevent concurrent discoveries
     if (_isDiscovering || _nativeDiscoveryState != 'idle') {
@@ -447,7 +443,7 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
   }
-
+  //direct bluetooth pairing -- hidden on Android
   Future<void> _pairBluetooth() async {
     try {
       final res = await EpsonPrinter.pairBluetoothDevice();
